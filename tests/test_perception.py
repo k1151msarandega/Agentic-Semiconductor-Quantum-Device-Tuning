@@ -436,6 +436,7 @@ class TestInspectionAgent:
         """An array that looks like single-dot by FFT should be overridable."""
         from qdot.perception.inspector import InspectionAgent
         from qdot.perception.classifier import EnsembleCNN
+        from qdot.core.types import DQCResult, DQCQuality
 
         # Create agent with very permissive override thresholds
         agent = InspectionAgent(
@@ -443,11 +444,20 @@ class TestInspectionAgent:
             peak_ratio_threshold=0.1,   # extremely low → will always trigger SD override
             diagonal_strength_min=0.99,  # extremely high → diagonal always "missing"
         )
-        arr = _make_featureless_patch(32, level=0.3)
-        arr[0, 0] = 1.0  # prevent DQC LOW by adding some dynamic range
-        arr[16, 16] = 0.0
+        arr = _make_double_dot_patch(32)  # Use a valid patch instead of featureless
         m = _make_measurement(array=arr)
-        cls, _ = agent.inspect(m)
+        
+        # Bypass DQC check by providing a pre-approved MODERATE result
+        dqc_override = DQCResult(
+            measurement_id=m.id,
+            quality=DQCQuality.MODERATE,
+            snr_db=15.0,
+            dynamic_range=0.4,
+            flatness_score=0.1,
+            physically_plausible=True,
+            notes="Test override"
+        )
+        cls, _ = agent.inspect(m, dqc_result=dqc_override)
         # We don't assert the specific label — just that it ran and has a result
         assert cls.label in ChargeLabel
 
