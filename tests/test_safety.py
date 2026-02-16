@@ -24,8 +24,8 @@ def make_proposal(dvg1: float, dvg2: float) -> ActionProposal:
     return ActionProposal(delta_v=VoltagePoint(dvg1, dvg2))
 
 
-def make_critic(**kwargs) -> SafetyCritic:
-    return SafetyCritic(voltage_bounds=DEFAULT_BOUNDS, l1_max=0.10, M_min=0.02, **kwargs)
+def make_critic(M_min: float = 0.02, l1_max: float = 0.10) -> SafetyCritic:
+    return SafetyCritic(voltage_bounds=DEFAULT_BOUNDS, l1_max=l1_max, M_min=M_min)
 
 
 # ---------------------------------------------------------------------------
