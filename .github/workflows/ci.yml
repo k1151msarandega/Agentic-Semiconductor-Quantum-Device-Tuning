@@ -107,5 +107,5 @@ jobs:
             --budget 2048 \
             --skip-missing-checkpoints \
             --out /tmp/phase2_benchmark
-        timeout-minutes: 20
+        timeout-minutes: 30
         continue-on-error: true   # benchmark is informational until fully integrated

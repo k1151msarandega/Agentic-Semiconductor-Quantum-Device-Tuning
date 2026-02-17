@@ -35,7 +35,6 @@ Key design decisions honoured:
 from __future__ import annotations
 
 import time
-import uuid
 from typing import Optional
 
 import numpy as np

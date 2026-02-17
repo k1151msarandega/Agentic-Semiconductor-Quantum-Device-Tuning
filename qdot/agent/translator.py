@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 # Phase 0 types — always import, never redefine
 from qdot.core.types import Measurement, MeasurementModality, MeasurementPlan
