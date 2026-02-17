@@ -38,13 +38,17 @@ import time
 import uuid
 from typing import Optional
 
+import numpy as np
+
 # Phase 0 types — ALL imported from canonical locations
 from qdot.core.types import (
     ActionProposal,
     ChargeLabel,
     Decision,
     DQCQuality,
+    HITLOutcome,
     MeasurementModality,
+    MeasurementPlan,
     TuningStage,
     VoltagePoint,
 )
@@ -207,7 +211,6 @@ class ExecutiveAgent:
         BOOTSTRAPPING: verify device responds and charge sensor is functional.
         """
         # Take a quick line scan to check for electrical response
-        from qdot.core.types import MeasurementPlan, MeasurementModality
         plan = MeasurementPlan(
             modality=MeasurementModality.LINE_SCAN,
             axis="vg1",
@@ -224,7 +227,6 @@ class ExecutiveAgent:
         self.state.add_measurement(m)
 
         arr = m.array
-        import numpy as np
         signal_detected = float(arr.max() - arr.min()) > 0.1
         device_responds = float(arr.var()) > 1e-6
         return bootstrap_result(device_responds, signal_detected)
@@ -259,7 +261,6 @@ class ExecutiveAgent:
             # DQC LOW → stop, don't pass to InspectionAgent
             return survey_result(peak_found=False, peak_quality=0.0)
 
-        import numpy as np
         arr = m.array if m.array is not None else []
         arr = np.asarray(arr)
         peak_quality = float((arr.max() - arr.mean()) / (arr.max() + 1e-8))
@@ -367,7 +368,6 @@ class ExecutiveAgent:
             event = self.hitl_manager.await_decision(event)
             self.state.add_hitl_event(event)
 
-            from qdot.core.types import HITLOutcome
             if event.outcome == HITLOutcome.REJECTED:
                 return navigation_result(target_reached=False, belief_confidence=0.0)
             if event.outcome == HITLOutcome.MODIFIED and event.modified_delta_v:
@@ -419,7 +419,6 @@ class ExecutiveAgent:
         """
         VERIFICATION: confirm (1,1) is stable over repeated measurements.
         """
-        import numpy as np
         confirmations = 0
         n_checks = 3
 

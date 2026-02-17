@@ -24,7 +24,7 @@ from typing import Optional, Dict, Tuple
 
 # Phase 0 types — never redefine these
 from qdot.core.state import BeliefState
-from qdot.core.types import Classification, Measurement, MeasurementModality
+from qdot.core.types import ChargeLabel, Classification, Measurement, MeasurementModality
 
 # Phase 0 simulator — reuse physics, don't reimplement it
 from qdot.simulator.cim import ConstantInteractionDevice
@@ -411,7 +411,6 @@ class BeliefUpdater:
         if classification.physics_override:
             return  # Already penalised above; don't double-count
 
-        from qdot.core.types import ChargeLabel
         label = classification.label
         confidence = classification.confidence
 

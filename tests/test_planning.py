@@ -13,8 +13,10 @@ import uuid
 
 # Phase 0 types and state
 from qdot.core.types import (
+    ActionProposal as CanonicalActionProposal,
     BacktrackEvent,
     BOPoint,
+    BOPoint as CanonicalBOPoint,
     ChargeLabel,
     Classification,
     DQCQuality,
@@ -309,7 +311,6 @@ class TestGaussianProcess:
 class TestMultiResBO:
     def test_propose_returns_action_proposal_type(self):
         """ActionProposal must be from qdot.core.types (no local redefinition)."""
-        from qdot.core.types import ActionProposal as CanonicalActionProposal
         state = make_state()
         state.belief.initialise_uniform()
         bo = MultiResBO(belief=state.belief, voltage_bounds=state.voltage_bounds)
@@ -351,7 +352,6 @@ class TestMultiResBO:
 
     def test_make_bo_point_returns_canonical_type(self):
         """make_bo_point must return BOPoint from qdot.core.types."""
-        from qdot.core.types import BOPoint as CanonicalBOPoint
         state = make_state()
         state.belief.initialise_uniform()
         bo = MultiResBO(belief=state.belief, voltage_bounds=state.voltage_bounds)
