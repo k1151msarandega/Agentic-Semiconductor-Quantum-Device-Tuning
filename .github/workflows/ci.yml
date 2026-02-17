@@ -79,6 +79,12 @@ jobs:
         run: pytest tests/test_agent.py -v --tb=short
 
       # ------------------------------------------------------------------
+      # Phase 0/1/2 integration test (full pipeline smoke test)
+      # ------------------------------------------------------------------
+      - name: Run Phase 0/1/2 integration test
+        run: pytest tests/test_integration_phase012.py -v --tb=short
+
+      # ------------------------------------------------------------------
       # Phase 2 full test suite with coverage
       # ------------------------------------------------------------------
       - name: Full test suite with coverage
@@ -99,6 +105,7 @@ jobs:
           python experiments/benchmark_phase2.py \
             --n-trials 100 \
             --budget 2048 \
+            --skip-missing-checkpoints \
             --out /tmp/phase2_benchmark
         timeout-minutes: 20
-        continue-on-error: true   # benchmark is informational until Phase 2 is fully integrated
+        continue-on-error: true   # benchmark is informational until fully integrated
