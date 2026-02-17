@@ -436,7 +436,7 @@ class TestStateMachine:
             survey_result(True, 0.8),                              # COARSE_SURVEY → CHARGE_ID
             charge_id_result("double-dot", 0.85),                  # CHARGE_ID → NAVIGATION
             navigation_result(target_reached=True, belief_confidence=0.85),  # NAVIGATION → VERIFICATION
-            verification_result(stable=True, reproducibility=0.9, charge_noise=0.05),  # VERIFICATION → COMPLETE
+            verification_result(stable=True, reproducibility=0.95, charge_noise=0.02),  # VERIFICATION → COMPLETE
         ]
 
         for result in stages_results:

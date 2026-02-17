@@ -27,6 +27,7 @@ Blueprint reference: §3.2 (Backtracking State Machine), Fig. 3
 from __future__ import annotations
 
 import time
+import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -367,6 +368,3 @@ def verification_result(
         reason=f"Reproducibility={reproducibility:.2f}, charge_noise={charge_noise:.3f}",
         data={"stable": stable, "reproducibility": reproducibility, "charge_noise": charge_noise},
     )
-
-
-import numpy as np
