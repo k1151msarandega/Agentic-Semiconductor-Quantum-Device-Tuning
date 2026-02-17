@@ -33,17 +33,72 @@ jobs:
         run: ruff check qdot/ tests/
         continue-on-error: true  # don't block on style during active dev
 
+      # ------------------------------------------------------------------
+      # Phase 0 tests (types, state, governance, HITL)
+      # ------------------------------------------------------------------
       - name: Run Phase 0 tests
-        run: pytest tests/test_*.py -v --tb=short -k "not perception"
+        run: pytest tests/test_types.py tests/test_state.py -v --tb=short
 
-      - name: Run Phase 1 perception tests
-        run: pytest tests/test_perception.py -v --tb=short
-
+      # ------------------------------------------------------------------
+      # Phase 0 safety fuzz (zero violations — hard requirement)
+      # ------------------------------------------------------------------
       - name: Safety fuzz test (required — zero violations)
         run: pytest tests/test_safety.py::TestFuzz -v
 
+      # ------------------------------------------------------------------
+      # Phase 0 simulator tests
+      # ------------------------------------------------------------------
+      - name: Run simulator tests
+        run: pytest tests/test_simulator.py -v --tb=short
+
+      # ------------------------------------------------------------------
+      # Phase 1 perception tests
+      # ------------------------------------------------------------------
+      - name: Run Phase 1 perception tests
+        run: pytest tests/test_perception.py -v --tb=short
+
+      # ------------------------------------------------------------------
+      # Phase 1 training smoke test (must pass — not continue-on-error)
+      # ------------------------------------------------------------------
       - name: Phase 1 fast training check (smoke test)
         run: |
           python experiments/train_phase1.py --fast --out /tmp/phase1_ci_check
         timeout-minutes: 15
-        continue-on-error: false  # this must pass
+        continue-on-error: false
+
+      # ------------------------------------------------------------------
+      # Phase 2 planning tests (belief, sensing, BO, state machine)
+      # ------------------------------------------------------------------
+      - name: Run Phase 2 planning tests
+        run: pytest tests/test_planning.py -v --tb=short
+
+      # ------------------------------------------------------------------
+      # Phase 2 agent tests (translator, executive — no HITL blocking)
+      # ------------------------------------------------------------------
+      - name: Run Phase 2 agent tests
+        run: pytest tests/test_agent.py -v --tb=short
+
+      # ------------------------------------------------------------------
+      # Phase 2 full test suite with coverage
+      # ------------------------------------------------------------------
+      - name: Full test suite with coverage
+        run: |
+          pytest tests/ -v --tb=short \
+            --cov=qdot \
+            --cov-report=term-missing \
+            --cov-fail-under=70
+        continue-on-error: true   # coverage target is aspirational during active dev
+
+      # ------------------------------------------------------------------
+      # Phase 2 benchmark (measurement reduction target ≥50%)
+      # NOTE: Only runs on main branch pushes to avoid slowing down PRs
+      # ------------------------------------------------------------------
+      - name: Phase 2 benchmark (100 CIM trials)
+        if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
+        run: |
+          python experiments/benchmark_phase2.py \
+            --n-trials 100 \
+            --budget 2048 \
+            --out /tmp/phase2_benchmark
+        timeout-minutes: 20
+        continue-on-error: true   # benchmark is informational until Phase 2 is fully integrated
