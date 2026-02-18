@@ -108,5 +108,13 @@ jobs:
             --fast \
             --skip-missing-checkpoints \
             --out /tmp/phase2_benchmark
-        timeout-minutes: 60
+        timeout-minutes: 200
         continue-on-error: true   # benchmark is informational until fully integrated
+
+      - name: Upload Phase 2 benchmark results
+        if: always() && github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase2-benchmark-results
+          path: /tmp/phase2_benchmark/
+          retention-days: 7

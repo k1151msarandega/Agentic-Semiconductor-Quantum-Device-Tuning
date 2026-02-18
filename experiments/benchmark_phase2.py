@@ -70,8 +70,8 @@ def main():
     if args.fast:
         args.n_trials = 10
         args.budget = 512
-        args.max_steps = 20  # Reduced from 30 - faster CI
-        print("FAST MODE: 10 trials, 512 budget, 20 max steps")
+        args.max_steps = 50  # Needs to be high enough for full stage sequence
+        print("FAST MODE: 10 trials, 512 budget, 50 max steps")
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
