@@ -108,5 +108,5 @@ jobs:
             --fast \
             --skip-missing-checkpoints \
             --out /tmp/phase2_benchmark
-        timeout-minutes: 15
+        timeout-minutes: 40
         continue-on-error: true   # benchmark is informational until fully integrated
