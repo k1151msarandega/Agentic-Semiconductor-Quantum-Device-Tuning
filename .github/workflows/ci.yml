@@ -96,16 +96,17 @@ jobs:
         continue-on-error: true   # coverage target is aspirational during active dev
 
       # ------------------------------------------------------------------
-      # Phase 2 benchmark (measurement reduction target ≥50%)
+      # Phase 2 benchmark (fast mode: infrastructure testing only)
+      # This validates that the agent loop runs without crashing.
+      # Full 100-trial benchmark must be run locally to validate paper claims.
       # NOTE: Only runs on main branch pushes to avoid slowing down PRs
       # ------------------------------------------------------------------
-      - name: Phase 2 benchmark (100 CIM trials)
+      - name: Phase 2 benchmark (fast mode)
         if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
         run: |
           python experiments/benchmark_phase2.py \
-            --n-trials 100 \
-            --budget 2048 \
+            --fast \
             --skip-missing-checkpoints \
             --out /tmp/phase2_benchmark
-        timeout-minutes: 30
+        timeout-minutes: 15
         continue-on-error: true   # benchmark is informational until fully integrated

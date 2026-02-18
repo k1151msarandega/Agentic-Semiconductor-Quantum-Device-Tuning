@@ -66,15 +66,15 @@ class ActiveSensingPolicy:
     def __init__(
         self,
         device: Optional[ConstantInteractionDevice] = None,
-        n_mc_samples: int = 8,
+        n_mc_samples: int = 8,  # Original value - validate reductions with ablations
         info_gain_threshold: float = 1e-4,
     ):
         """
         Args:
             device: CIM physics device for simulating hypothetical measurements.
                     Uses default ConstantInteractionDevice if None.
-            n_mc_samples: Monte Carlo samples for IG estimation (8 balances
-                          accuracy vs speed — a key budget constraint).
+            n_mc_samples: Monte Carlo samples for IG estimation. Trade-off: 4 is faster, 8-16 is more accurate.
+                         Run ablations to determine impact on sensing policy quality before reducing.
             info_gain_threshold: Minimum IG/cost to justify any measurement.
         """
         self.device = device or ConstantInteractionDevice()

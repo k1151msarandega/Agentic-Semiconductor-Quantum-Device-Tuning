@@ -57,7 +57,9 @@ def main():
     parser.add_argument("--max-steps", type=int, default=100,
                         help="Max control steps per trial (default: 100)")
     parser.add_argument("--fast", action="store_true",
-                        help="Fast mode: 10 trials, lower budget")
+                        help="Fast mode: 10 trials, reduced budgets for CI")
+    parser.add_argument("--profile", action="store_true",
+                        help="Enable profiling to identify bottlenecks")
     parser.add_argument("--skip-missing-checkpoints", action="store_true",
                         help="Run without trained InspectionAgent (for CI)")
     parser.add_argument("--out", type=str, default="results/benchmark_phase2",
@@ -68,8 +70,8 @@ def main():
     if args.fast:
         args.n_trials = 10
         args.budget = 512
-        args.max_steps = 30
-        print("FAST MODE: 10 trials, 512 measurement budget, 30 max steps")
+        args.max_steps = 20  # Reduced from 30 - faster CI
+        print("FAST MODE: 10 trials, 512 budget, 20 max steps")
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +89,14 @@ def main():
 
     # Load Phase 1 components
     inspector = load_inspector(args.skip_missing_checkpoints)
+
+    # Start profiling if requested
+    profiler = None
+    if args.profile:
+        import cProfile
+        profiler = cProfile.Profile()
+        profiler.enable()
+        print("⚙️  Profiling enabled\n")
 
     # Run trials
     np.random.seed(args.seed)
@@ -112,6 +122,17 @@ def main():
 
     # Save detailed results
     save_results(summary, results, out_dir)
+
+    # Stop profiling and print results
+    if profiler is not None:
+        profiler.disable()
+        import pstats
+        print("\n" + "="*70)
+        print("PROFILING RESULTS — Top 20 Time Sinks")
+        print("="*70)
+        stats = pstats.Stats(profiler)
+        stats.sort_stats('cumulative')
+        stats.print_stats(20)
 
     # Exit with appropriate code
     if summary["success_rate"] < 0.90:

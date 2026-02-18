@@ -146,13 +146,17 @@ class CIMObservationModel:
 
         Note: temporarily sets the device disorder to favour this state.
         This is a simplified version — Phase 3 disorder learning will refine it.
+        
+        PERFORMANCE NOTE: This is the critical bottleneck (called once per particle per measurement).
+        The nested loop calling device.current() is slow. Future optimization: vectorize the CIM
+        device to accept 2D voltage arrays and compute all points at once (10-50× speedup).
         """
         v1_vals = np.linspace(v1_range[0], v1_range[1], resolution)
         v2_vals = np.linspace(v2_range[0], v2_range[1], resolution)
         patch = np.zeros((resolution, resolution), dtype=np.float32)
 
-        # Bias the device towards (n1, n2) by temporarily adjusting gate offsets
-        # This is a first-order approximation: real CIM evaluates all states
+        # BOTTLENECK: Nested loop with Python function calls
+        # TODO: Replace with vectorized device.current_2d(v1_grid, v2_grid) method
         for i, v2 in enumerate(v2_vals):
             for j, v1 in enumerate(v1_vals):
                 patch[i, j] = self.device.current(v1, v2)
@@ -236,14 +240,15 @@ class BeliefUpdater:
     def __init__(
         self,
         belief: BeliefState,
-        n_particles: int = 1000,
+        n_particles: int = 1000,  # Original value - validate reductions with ablations
         n_max: int = 4,
         obs_model: Optional[CIMObservationModel] = None,
     ):
         """
         Args:
             belief: The BeliefState from ExperimentState (Phase 0 stub).
-            n_particles: Number of filter particles.
+            n_particles: Number of filter particles. Trade-off: 500 is faster, 1000 is more accurate.
+                        Run ablations to determine impact on benchmark metrics before reducing.
             n_max: Maximum electrons per dot to consider.
             obs_model: CIM observation model (created from belief.device_params if None).
         """
