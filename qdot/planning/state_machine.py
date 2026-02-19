@@ -79,6 +79,8 @@ STAGE_ORDER: List[TuningStage] = [
 ]
 
 DEFAULT_STAGE_CONFIGS: Dict[TuningStage, StageConfig] = {
+    # IMPORTANT: success_threshold must align with the confidence values returned
+    # by the corresponding stage executor (_run_bootstrap, _run_survey, etc.)
     TuningStage.BOOTSTRAPPING: StageConfig(
         stage=TuningStage.BOOTSTRAPPING,
         success_threshold=0.5,
@@ -88,28 +90,28 @@ DEFAULT_STAGE_CONFIGS: Dict[TuningStage, StageConfig] = {
     ),
     TuningStage.COARSE_SURVEY: StageConfig(
         stage=TuningStage.COARSE_SURVEY,
-        success_threshold=0.3,
+        success_threshold=0.2,  # Match peak_found threshold in _run_survey()
         max_retries=3,
         max_backtracks=2,
         description="Locate any Coulomb peak boundary",
     ),
     TuningStage.CHARGE_ID: StageConfig(
         stage=TuningStage.CHARGE_ID,
-        success_threshold=0.7,
+        success_threshold=0.5,  # Match effective > 0.5 in charge_id_result()
         max_retries=2,
         max_backtracks=2,
         description="Classify current charge region via InspectionAgent",
     ),
     TuningStage.NAVIGATION: StageConfig(
         stage=TuningStage.NAVIGATION,
-        success_threshold=0.8,
+        success_threshold=0.7,  # Match belief_confidence >= 0.7 in navigation_result()
         max_retries=3,
         max_backtracks=2,
         description="Navigate to target (1,1) charge state via BO",
     ),
     TuningStage.VERIFICATION: StageConfig(
         stage=TuningStage.VERIFICATION,
-        success_threshold=0.9,
+        success_threshold=0.7,  # Align with confidence = reproducibility * (1 - charge_noise)
         max_retries=2,
         max_backtracks=1,
         description="Confirm (1,1) is stable across repeated measurements",
