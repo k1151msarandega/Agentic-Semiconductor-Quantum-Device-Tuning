@@ -141,6 +141,81 @@ class ConstantInteractionDevice:
 
         return float(np.clip(conductance, 0, None))
 
+    def current_for_state(self, vg1: float, vg2: float, n1: int, n2: int) -> float:
+        """
+        POMDP observation model: predicted conductance given (n1, n2) is the ground state.
+
+        Unlike current(), which finds the actual quantum ground state by minimising over
+        all charge configurations, this method evaluates conductance *from the perspective
+        of a specific charge state hypothesis* (n1, n2).
+
+        Used exclusively by the belief updater and active sensing policy — never by the
+        hardware adapter (which always calls current() to measure the true conductance).
+
+        Physics rationale
+        -----------------
+        Conductance peaks at charge degeneracy points — the boundaries between stability
+        regions where two charge states have equal energy. If the device is hypothesised to
+        be in state (n1, n2), the relevant transitions are from (n1, n2) to its four nearest
+        neighbours {(n1±1, n2), (n1, n2±1)}. The energy gap to the closest neighbour sets
+        the Lorentzian peak width.
+
+        The Boltzmann factor exp(-ΔE / T) weights by how likely (n1, n2) actually is the
+        ground state at (vg1, vg2):
+            ΔE = E(n1, n2) − E_min ≥ 0
+        When (n1, n2) IS the ground state, ΔE = 0, Boltzmann weight = 1, and this method
+        returns the same conductance as current(). When (n1, n2) is NOT the ground state
+        (ΔE >> T), the weight collapses to zero, penalising inconsistent hypotheses.
+
+        This is what makes different (n1, n2) particles distinguishable: predictions are
+        high near the stability boundary of the hypothesised state and suppressed elsewhere.
+
+        Args:
+            vg1, vg2: Gate voltages (V).
+            n1, n2:   Hypothesised charge occupation of dot 1 and dot 2.
+
+        Returns:
+            Predicted conductance ∈ [0, ∞), clipped at 0.
+        """
+        # Apply disorder offset if available (Phase 3 — same treatment as current())
+        if self._disorder_map is not None:
+            disorder_offset = self._interpolate_disorder(vg1, vg2)
+            vg1 = vg1 + disorder_offset * 0.1
+
+        # Energy of the hypothesised state
+        E_target = self.ground_state_energy(vg1, vg2, n1, n2)
+
+        # Actual ground state energy (minimum over all states)
+        all_states = [(m1, m2) for m1 in range(3) for m2 in range(3)]
+        E_min = min(self.ground_state_energy(vg1, vg2, m1, m2) for m1, m2 in all_states)
+
+        # Boltzmann weight: probability that (n1, n2) is the ground state at this voltage
+        delta_E = max(0.0, E_target - E_min)
+        T_eff = max(self.T, 0.01)   # prevent division by zero at T → 0
+        boltzmann = float(np.exp(-delta_E / T_eff))
+
+        # Minimum energy gap from (n1, n2) to any neighbouring charge state
+        # This determines where (on the gate-voltage axes) conductance peaks occur
+        neighbour_energies = []
+        for dn1, dn2 in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+            m1, m2 = n1 + dn1, n2 + dn2
+            if 0 <= m1 <= 2 and 0 <= m2 <= 2:
+                neighbour_energies.append(self.ground_state_energy(vg1, vg2, m1, m2))
+
+        if not neighbour_energies:
+            return 0.0
+
+        energy_gap = min(abs(E_n - E_target) for E_n in neighbour_energies)
+
+        # Lorentzian conductance (same functional form as current())
+        broadening = max(self.t_c, self.T)
+        conductance = broadening / (energy_gap ** 2 + broadening ** 2)
+
+        # No noise here — noise is added by the adapter layer (current()) or by the
+        # sensing policy's explicit perturbation. Keeping this deterministic improves
+        # the particle filter's likelihood stability.
+        return float(np.clip(conductance * boltzmann, 0, None))
+
     def inject_disorder(self, disorder_posterior: Dict) -> None:
         """
         Inject device-specific disorder from DisorderLearner (Phase 3).

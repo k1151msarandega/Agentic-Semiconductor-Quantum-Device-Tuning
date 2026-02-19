@@ -157,9 +157,15 @@ class CIMObservationModel:
 
         # BOTTLENECK: Nested loop with Python function calls
         # TODO: Replace with vectorized device.current_2d(v1_grid, v2_grid) method
+        #
+        # FIX: Use current_for_state() not current() so predictions differ per particle.
+        # current() ignores (n1, n2) entirely — all particles would get identical
+        # likelihoods and the filter would never update. current_for_state() conditions
+        # on (n1, n2) being the ground state via a Boltzmann weight, making states
+        # distinguishable by the regions of gate space where they are stable.
         for i, v2 in enumerate(v2_vals):
             for j, v1 in enumerate(v1_vals):
-                patch[i, j] = self.device.current(v1, v2)
+                patch[i, j] = self.device.current_for_state(v1, v2, n1, n2)
 
         return patch
 
@@ -197,9 +203,10 @@ class CIMObservationModel:
         trace = np.zeros(steps, dtype=np.float32)
         for i, v in enumerate(voltages):
             if axis == "vg1":
-                trace[i] = self.device.current(v, fixed)
+                # FIX: current_for_state() not current() — see predicted_conductance_2d note
+                trace[i] = self.device.current_for_state(v, fixed, n1, n2)
             else:
-                trace[i] = self.device.current(fixed, v)
+                trace[i] = self.device.current_for_state(fixed, v, n1, n2)
         return trace
 
     def log_likelihood_1d(
@@ -383,7 +390,10 @@ class BeliefUpdater:
             for j, v1 in enumerate(v1_vals):
                 predictions = []
                 for n1, n2 in self._particles.particles:
-                    G = self.obs_model.device.current(v1, v2)
+                    # FIX: current_for_state() not current() — predictions must differ
+                    # across particles for the variance to be non-zero. current() gives
+                    # the same value for all (n1, n2), collapsing variance to 0 everywhere.
+                    G = self.obs_model.device.current_for_state(v1, v2, int(n1), int(n2))
                     predictions.append(G)
                 predictions = np.array(predictions)
                 mean_G = float(np.sum(w * predictions))

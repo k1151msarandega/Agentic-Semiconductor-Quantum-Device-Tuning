@@ -201,13 +201,19 @@ class ActiveSensingPolicy:
         patch = np.zeros((resolution, resolution), dtype=np.float32)
         for i, vv2 in enumerate(v2):
             for j, vv1 in enumerate(v1):
-                patch[i, j] = self.device.current(vv1, vv2)
+                # FIX: current_for_state() not current() — n1, n2 must influence the
+                # simulated measurement. With current(), all hypothetical observations are
+                # identical regardless of which charge state is sampled, making the
+                # posterior = prior and IG = 0 for every modality, causing the policy
+                # to return NONE indefinitely.
+                patch[i, j] = self.device.current_for_state(vv1, vv2, n1, n2)
         patch += np.random.normal(0, 0.02, patch.shape).astype(np.float32)
         return patch
 
     def _sim_1d(self, n1: int, n2: int, v_range, steps: int) -> np.ndarray:
         v = np.linspace(v_range[0], v_range[1], steps)
-        trace = np.array([self.device.current(vv, 0.0) for vv in v], dtype=np.float32)
+        # FIX: current_for_state() not current() — see _sim_2d note above
+        trace = np.array([self.device.current_for_state(vv, 0.0, n1, n2) for vv in v], dtype=np.float32)
         trace += np.random.normal(0, 0.02, trace.shape).astype(np.float32)
         return trace
 
@@ -230,7 +236,8 @@ class ActiveSensingPolicy:
             n1, n2 = state
             if modality == MeasurementModality.LINE_SCAN:
                 v = np.linspace(v1_range[0], v1_range[1], len(observed))
-                predicted = np.array([self.device.current(vv, 0.0) for vv in v])
+                # FIX: current_for_state() not current() — same reason as _sim_1d
+                predicted = np.array([self.device.current_for_state(vv, 0.0, n1, n2) for vv in v])
             else:
                 predicted = self._sim_2d(n1, n2, v1_range, v2_range, resolution)
 
