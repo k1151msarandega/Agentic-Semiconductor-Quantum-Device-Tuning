@@ -143,6 +143,10 @@ class ActiveSensingPolicy:
                         rationale=f"{modality.value}: IG/cost={score:.6f} (IG={ig:.4f}, cost={cost})",
                         info_gain_per_cost=score,
                     )
+                # FIX (Codex): assign best_plan here. Original code set `plan` locally
+                # but never updated best_plan, so the NONE initializer was always returned
+                # even when a higher-scoring modality was found.
+                best_plan = plan
 
         if best_score < self.info_gain_threshold:
             return MeasurementPlan(
@@ -165,8 +169,21 @@ class ActiveSensingPolicy:
     ) -> float:
         """Expected information gain = H(prior) - E[H(posterior)]."""
         prior_entropy = belief.entropy()
-        if prior_entropy == 0.0:
-            return 0.0  # Already fully certain
+
+        # Defensive fallback: if BeliefState.entropy() is a Phase 0 stub that
+        # returns 0.0 but charge_probs is actually populated (by BeliefUpdater),
+        # compute entropy directly from the probability dict.  Without this, the
+        # early-exit below fires on every call and IG is always 0, so the sensing
+        # policy can never select a real measurement modality.
+        if prior_entropy == 0.0 and belief.charge_probs:
+            probs = np.array(list(belief.charge_probs.values()), dtype=np.float64)
+            probs = probs / (probs.sum() + 1e-12)
+            nonzero = probs[probs > 1e-10]
+            if len(nonzero) > 0:
+                prior_entropy = float(-np.sum(nonzero * np.log(nonzero)))
+
+        if prior_entropy < 1e-10:
+            return 0.0  # Already fully certain — no measurement can help
 
         resolution = MODALITY_RESOLUTION[modality]
         posterior_entropies = []
