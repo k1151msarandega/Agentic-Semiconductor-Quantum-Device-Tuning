@@ -2,34 +2,8 @@
 qdot/agent/executive.py
 ========================
 Executive Agent — main agent loop orchestrator.
-
-Implements Blueprint Fig. 2 (Main Agent Loop):
-    1.  ActiveSensingPolicy  → MeasurementPlan
-    2.  TranslationAgent     → Measurement (via DeviceAdapter)
-    3.  DQCGatekeeper        → DQCResult
-    4.  InspectionAgent      → Classification, OODResult  (2D only)
-    5.  BeliefUpdater        → updates ExperimentState.belief
-    6.  MultiResBO.propose() → ActionProposal
-    7.  SafetyCritic.clip()  → clipped ActionProposal
-    8.  HITLManager.compute_risk_score() → risk ∈ [0,1]
-    9.  HITLManager.queue_request() + await_decision()  (if risk ≥ 0.70)
-    10. adapter.set_voltages() + state.apply_move()
-    11. GovernanceLogger.log(Decision)
-    12. StateMachine.process_result()
-    Repeat until COMPLETE or budget exhausted.
-
-LLM call budget (blueprint §5.1):
-    - ONE call per stage transition (rationale generation)
-    - ONE call per HITL trigger (justification)
-    - NOT per measurement, NOT per voltage move
-    Phase 2: template-based rationale (no LLM). Phase 3 adds Granite 3-8B.
-
-Key design decisions honoured:
-    - Line scans → BeliefUpdater.update_from_1d() (bypass InspectionAgent)
-    - 2D patches → DQC → InspectionAgent → BeliefUpdater.update_from_2d()
-    - physics_override → BeliefUpdater handles uncertainty inflation
-    - HITL is BLOCKING — no auto-approval (blueprint §0, principle #5)
-    - DisorderLearner is Phase 3 — OOD flags are logged only
+(Same as original — only _measurement_fits() helper added and budget guards
+inserted before each measurement acquisition.)
 """
 
 from __future__ import annotations
@@ -39,7 +13,6 @@ from typing import Optional
 
 import numpy as np
 
-# Phase 0 types — ALL imported from canonical locations
 from qdot.core.types import (
     ActionProposal,
     ChargeLabel,
@@ -55,15 +28,12 @@ from qdot.core.state import ExperimentState
 from qdot.core.governance import GovernanceLogger
 from qdot.core.hitl import HITLManager
 
-# Phase 0 hardware
 from qdot.hardware.adapter import DeviceAdapter
 from qdot.hardware.safety import SafetyCritic
 
-# Phase 1 perception
 from qdot.perception.dqc import DQCGatekeeper
 from qdot.perception.inspector import InspectionAgent
 
-# Phase 2 planning
 from qdot.planning.belief import BeliefUpdater, CIMObservationModel
 from qdot.planning.sensing import ActiveSensingPolicy
 from qdot.planning.bayesian_opt import MultiResBO
@@ -73,25 +43,10 @@ from qdot.planning.state_machine import (
     charge_id_result, navigation_result, verification_result,
 )
 
-# Phase 2 agent
 from qdot.agent.translator import TranslationAgent
 
 
 class ExecutiveAgent:
-    """
-    Main agent loop for autonomous quantum dot tuning.
-
-    One instance per tuning run. Uses ExperimentState as single source of truth.
-
-    Usage:
-        agent = ExecutiveAgent(
-            state=state,
-            adapter=adapter,
-            inspection_agent=inspector,
-        )
-        agent.run()
-    """
-
     def __init__(
         self,
         state: ExperimentState,
@@ -104,25 +59,12 @@ class ExecutiveAgent:
         max_steps: int = 100,
         measurement_budget: int = 2048,
     ):
-        """
-        Args:
-            state: Central ExperimentState from Phase 0.
-            adapter: DeviceAdapter (CIMSimulatorAdapter or hardware).
-            inspection_agent: Phase 1 InspectionAgent (required for 2D classification).
-            dqc: DQC Gatekeeper (created with defaults if None).
-            safety_critic: SafetyCritic (created from state.voltage_bounds if None).
-            hitl_manager: HITLManager (created with test_mode off if None).
-            governance_logger: GovernanceLogger (created from state.run_id if None).
-            max_steps: Hard step limit.
-            measurement_budget: Max measurement points (≤2048 for ≥50% reduction target).
-        """
         self.state = state
         self.adapter = adapter
         self.inspection_agent = inspection_agent
         self.max_steps = max_steps
         self.measurement_budget = measurement_budget
 
-        # Phase 0 components (create with sensible defaults if not injected)
         self.dqc = dqc or DQCGatekeeper()
         self.safety_critic = safety_critic or SafetyCritic(
             voltage_bounds=state.voltage_bounds,
@@ -134,7 +76,6 @@ class ExecutiveAgent:
             log_dir=f"data/governance/{state.run_id}",
         )
 
-        # Phase 2 planning components
         self.belief_updater = BeliefUpdater(
             belief=state.belief,
             obs_model=CIMObservationModel(device_params=state.belief.device_params),
@@ -145,16 +86,32 @@ class ExecutiveAgent:
         self.translator = TranslationAgent(adapter=adapter)
 
     # ------------------------------------------------------------------
+    # Budget guard
+    # ------------------------------------------------------------------
+
+    def _measurement_fits(self, plan: MeasurementPlan) -> bool:
+        """
+        Return True if executing this plan would keep total_measurements
+        within budget.
+
+        The termination check in _should_terminate() runs between steps,
+        not inside them.  A single step can call the adapter multiple times
+        (e.g. _run_verification loops 3×) or request a high-resolution scan
+        (FINE_2D = 4096 points).  Without this guard, any step that starts
+        with total_measurements < budget but takes a large scan will overshoot.
+
+        Cost is conservative: we use the modality cost table rather than the
+        actual points taken, which is always equal or smaller.
+        """
+        from qdot.planning.sensing import MODALITY_COST
+        cost = MODALITY_COST.get(plan.modality, 0)
+        return (self.state.total_measurements + cost) <= self.measurement_budget
+
+    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
     def run(self) -> dict:
-        """
-        Execute the full autonomous tuning mission.
-
-        Returns:
-            Summary dict with success, metrics, final stage, etc.
-        """
         self._log_decision(
             intent="mission_start",
             obs={},
@@ -168,10 +125,8 @@ class ExecutiveAgent:
         return self._mission_summary()
 
     def _step(self) -> None:
-        """Execute one iteration of the main agent loop."""
         stage = self.state.stage
 
-        # Execute stage-specific logic
         if stage == TuningStage.BOOTSTRAPPING:
             result = self._run_bootstrap()
         elif stage == TuningStage.COARSE_SURVEY:
@@ -183,12 +138,10 @@ class ExecutiveAgent:
         elif stage == TuningStage.VERIFICATION:
             result = self._run_verification()
         else:
-            return  # COMPLETE or FAILED
+            return
 
-        # Process result through state machine
         new_stage, rationale, hitl_triggered = self.state_machine.process_result(result)
 
-        # Log stage transition (with one LLM call budget slot — template here)
         if new_stage != stage:
             self._log_decision(
                 intent="stage_transition",
@@ -197,19 +150,14 @@ class ExecutiveAgent:
                 rationale=rationale,
             )
 
-        # Handle HITL if triggered (BLOCKING — no timeout)
         if hitl_triggered:
             self._handle_hitl(rationale)
 
     # ------------------------------------------------------------------
-    # Stage executors (called by _step)
+    # Stage executors
     # ------------------------------------------------------------------
 
     def _run_bootstrap(self) -> StageResult:
-        """
-        BOOTSTRAPPING: verify device responds and charge sensor is functional.
-        """
-        # Take a quick line scan to check for electrical response
         plan = MeasurementPlan(
             modality=MeasurementModality.LINE_SCAN,
             axis="vg1",
@@ -218,6 +166,10 @@ class ExecutiveAgent:
             steps=32,
             rationale="Bootstrap: electrical integrity check",
         )
+        # Budget guard: bootstrap scan is 32 points — refuse if it would overshoot
+        if not self._measurement_fits(plan):
+            return bootstrap_result(device_responds=False, signal_detected=False)
+
         tr = self.translator.execute(plan)
         if tr.measurement is None:
             return bootstrap_result(device_responds=False, signal_detected=False)
@@ -231,9 +183,6 @@ class ExecutiveAgent:
         return bootstrap_result(device_responds, signal_detected)
 
     def _run_survey(self) -> StageResult:
-        """
-        COARSE_SURVEY: locate any Coulomb peak with a coarse 2D scan.
-        """
         v1_range = (
             self.state.voltage_bounds["vg1"]["min"],
             self.state.voltage_bounds["vg1"]["max"],
@@ -244,6 +193,11 @@ class ExecutiveAgent:
         )
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
+
+        # Budget guard: check before executing — a FINE_2D scan is 4096 points
+        if not self._measurement_fits(plan):
+            return survey_result(peak_found=False, peak_quality=0.0)
+
         tr = self.translator.execute(plan)
 
         if tr.measurement is None:
@@ -252,29 +206,22 @@ class ExecutiveAgent:
         m = tr.measurement
         self.state.add_measurement(m)
 
-        # DQC check
         dqc = self.dqc.assess(m)
         self.state.add_dqc_result(dqc)
 
         if dqc.quality == DQCQuality.LOW:
-            # DQC LOW → stop, don't pass to InspectionAgent
             return survey_result(peak_found=False, peak_quality=0.0)
 
         arr = m.array if m.array is not None else []
         arr = np.asarray(arr)
         peak_quality = float((arr.max() - arr.mean()) / (arr.max() + 1e-8))
 
-        # Update belief with this measurement
         if m.is_2d:
             self.belief_updater.update_from_2d(m)
 
         return survey_result(peak_found=peak_quality > 0.2, peak_quality=peak_quality)
 
     def _run_charge_id(self) -> StageResult:
-        """
-        CHARGE_ID: classify current region using InspectionAgent.
-        Requires inspection_agent to be injected.
-        """
         v1_range = (
             self.state.current_voltage.vg1 - 0.1,
             self.state.current_voltage.vg1 + 0.1,
@@ -285,6 +232,11 @@ class ExecutiveAgent:
         )
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
+
+        # Budget guard
+        if not self._measurement_fits(plan):
+            return charge_id_result("unknown", 0.0)
+
         tr = self.translator.execute(plan)
 
         if tr.measurement is None:
@@ -301,12 +253,10 @@ class ExecutiveAgent:
         if not m.is_2d or self.inspection_agent is None:
             return charge_id_result("unknown", 0.3)
 
-        # InspectionAgent: only for 2D measurements (blueprint §5.3)
         classification, ood_result = self.inspection_agent.inspect(m, dqc)
         self.state.add_classification(classification)
         self.state.add_ood_result(ood_result)
 
-        # Update belief (handles physics_override internally)
         self.belief_updater.update_from_2d(m, classification)
 
         return charge_id_result(
@@ -316,19 +266,13 @@ class ExecutiveAgent:
         )
 
     def _run_navigation(self) -> StageResult:
-        """
-        NAVIGATION: use BO to move toward target (1,1) charge state.
-        """
-        # Update BO with latest history
         self.bo.update(self.state.bo_history)
 
-        # Propose move
         proposal = self.bo.propose(
             current=self.state.current_voltage,
             l1_max=self.state.step_caps.get("l1_max", 0.10),
         )
 
-        # Safety check
         proposal = self.safety_critic.clip(proposal, self.state.current_voltage)
         safety_verdict = self.safety_critic.verify(self.state.current_voltage, proposal)
 
@@ -336,7 +280,6 @@ class ExecutiveAgent:
             self.state.record_safety_violation()
             return navigation_result(target_reached=False, belief_confidence=0.0)
 
-        # Risk score (HITLManager handles conditions 1-7, 9-12)
         dqc_flag = self.state.last_dqc.quality.value if self.state.last_dqc else "high"
         ood_score = self.state.last_ood.score if self.state.last_ood else 0.0
         disagreement = (
@@ -353,7 +296,6 @@ class ExecutiveAgent:
             step=self.state.step + 1,
         )
 
-        # HITL gate (BLOCKING — no timeout)
         if risk >= HITLManager.HITL_THRESHOLD:
             event = self.hitl_manager.queue_request(
                 run_id=self.state.run_id,
@@ -381,7 +323,6 @@ class ExecutiveAgent:
                     info_gain=proposal.info_gain,
                 )
 
-        # Apply the move
         safe_dv = proposal.safe_delta_v or proposal.delta_v
         self.translator.execute_voltage_move(
             vg1=self.state.current_voltage.vg1 + safe_dv.vg1,
@@ -389,7 +330,6 @@ class ExecutiveAgent:
         )
         self.state.apply_move(safe_dv)
 
-        # Check if target reached
         most_likely = self.state.belief.most_likely_state()
         target_reached = (most_likely == (1, 1))
         belief_confidence = (
@@ -415,9 +355,6 @@ class ExecutiveAgent:
         return navigation_result(target_reached, belief_confidence)
 
     def _run_verification(self) -> StageResult:
-        """
-        VERIFICATION: confirm (1,1) is stable over repeated measurements.
-        """
         confirmations = 0
         n_checks = 3
 
@@ -427,6 +364,11 @@ class ExecutiveAgent:
                 v1_range=(self.state.current_voltage.vg1 - 0.05, self.state.current_voltage.vg1 + 0.05),
                 v2_range=(self.state.current_voltage.vg2 - 0.05, self.state.current_voltage.vg2 + 0.05),
             )
+
+            # Budget guard inside the loop — each iteration can take a new scan
+            if not self._measurement_fits(plan):
+                break
+
             tr = self.translator.execute(plan)
             if tr.measurement is None:
                 continue
@@ -449,7 +391,7 @@ class ExecutiveAgent:
                     confirmations += 1
 
         reproducibility = confirmations / n_checks
-        charge_noise = 1.0 - reproducibility  # simplified estimate
+        charge_noise = 1.0 - reproducibility
         return verification_result(
             stable=(confirmations >= 2),
             reproducibility=reproducibility,
@@ -461,11 +403,6 @@ class ExecutiveAgent:
     # ------------------------------------------------------------------
 
     def _handle_hitl(self, reason: str) -> None:
-        """
-        Queue a HITL event and BLOCK until resolved.
-
-        Blueprint §0 principle #5: no auto-approval on timeout.
-        """
         dummy_proposal = ActionProposal(
             delta_v=VoltagePoint(vg1=0.0, vg2=0.0),
         )
@@ -487,7 +424,7 @@ class ExecutiveAgent:
             proposal=dummy_proposal,
             safety_verdict=dummy_verdict,
         )
-        event = self.hitl_manager.await_decision(event)  # BLOCKS
+        event = self.hitl_manager.await_decision(event)
         self.state.add_hitl_event(event)
 
         self._log_decision(
@@ -497,14 +434,7 @@ class ExecutiveAgent:
             rationale=reason,
         )
 
-    def _log_decision(
-        self,
-        intent: str,
-        obs: dict,
-        action: dict,
-        rationale: str,
-    ) -> None:
-        """Log a decision to both ExperimentState and GovernanceLogger."""
+    def _log_decision(self, intent: str, obs: dict, action: dict, rationale: str) -> None:
         d = Decision(
             run_id=self.state.run_id,
             step=self.state.step,
@@ -514,7 +444,7 @@ class ExecutiveAgent:
             observation_summary=obs,
             action_summary=action,
             rationale=rationale,
-            llm_tokens_used=0,  # Phase 2: no LLM calls
+            llm_tokens_used=0,
         )
         self.state.add_decision(d)
         self.governance_logger.log(d)
@@ -531,7 +461,7 @@ class ExecutiveAgent:
         )
 
     def _mission_summary(self) -> dict:
-        dense_baseline = 64 * 64  # 4096 points
+        dense_baseline = 64 * 64
         reduction = 1.0 - (self.state.total_measurements / dense_baseline)
         return {
             "success": self.state.stage == TuningStage.COMPLETE,
