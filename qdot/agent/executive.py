@@ -89,23 +89,72 @@ class ExecutiveAgent:
     # Budget guard
     # ------------------------------------------------------------------
 
-    def _measurement_fits(self, plan: MeasurementPlan) -> bool:
+    def _estimate_plan_cost(self, plan: MeasurementPlan) -> int:
         """
-        Return True if executing this plan would keep total_measurements
-        within budget.
+        Estimate measurement points consumed by a plan.
 
-        The termination check in _should_terminate() runs between steps,
-        not inside them.  A single step can call the adapter multiple times
-        (e.g. _run_verification loops 3×) or request a high-resolution scan
-        (FINE_2D = 4096 points).  Without this guard, any step that starts
-        with total_measurements < budget but takes a large scan will overshoot.
-
-        Cost is conservative: we use the modality cost table rather than the
-        actual points taken, which is always equal or smaller.
+        Mirrors ExperimentState._update_measurement_count() exactly so the
+        guard and the actual counter always agree.
         """
-        from qdot.planning.sensing import MODALITY_COST
-        cost = MODALITY_COST.get(plan.modality, 0)
-        return (self.state.total_measurements + cost) <= self.measurement_budget
+        if plan.modality == MeasurementModality.NONE:
+            return 0
+        if plan.modality == MeasurementModality.LINE_SCAN:
+            return int(plan.steps or 128)
+        if plan.resolution is None:
+            return 0
+        return int(plan.resolution * plan.resolution)
+
+    def _fit_plan_to_remaining_budget(self, plan: MeasurementPlan) -> MeasurementPlan:
+        """
+        Clamp or downgrade a plan so it cannot exceed the remaining measurement budget.
+
+        Strategy:
+          - Line scan: clamp steps to remaining points (minimum 2).
+          - 2D scan:   if it fits, keep as-is.  Otherwise downgrade to a line
+                       scan bounded by remaining points.  This preserves *some*
+                       measurement even at the budget boundary instead of
+                       discarding the step entirely.
+          - Budget exhausted: return NONE.
+
+        Using actual plan cost (steps or resolution²) rather than the cost-table
+        estimate ensures tight agreement with state._update_measurement_count().
+        """
+        remaining = self.measurement_budget - self.state.total_measurements
+        if remaining <= 0:
+            return MeasurementPlan(
+                modality=MeasurementModality.NONE,
+                rationale="Budget exhausted",
+            )
+
+        cost = self._estimate_plan_cost(plan)
+        if cost <= remaining:
+            return plan  # fits — no change needed
+
+        if plan.modality == MeasurementModality.LINE_SCAN:
+            steps = max(2, min(int(plan.steps or 128), remaining))
+            return MeasurementPlan(
+                modality=MeasurementModality.LINE_SCAN,
+                axis=plan.axis or "vg1",
+                start=plan.start,
+                stop=plan.stop,
+                steps=steps,
+                rationale=f"{plan.rationale} (budget-clamped to {steps} steps)",
+                info_gain_per_cost=plan.info_gain_per_cost,
+            )
+
+        # 2D scan doesn't fit: downgrade to a line scan
+        steps = max(2, min(128, remaining))
+        v1_min = self.state.voltage_bounds["vg1"]["min"]
+        v1_max = self.state.voltage_bounds["vg1"]["max"]
+        return MeasurementPlan(
+            modality=MeasurementModality.LINE_SCAN,
+            axis="vg1",
+            start=(plan.v1_range[0] if plan.v1_range else v1_min),
+            stop=(plan.v1_range[1] if plan.v1_range else v1_max),
+            steps=steps,
+            rationale=f"{plan.rationale} (downgraded to {steps}-pt line scan; budget remaining={remaining})",
+            info_gain_per_cost=plan.info_gain_per_cost,
+        )
 
     # ------------------------------------------------------------------
     # Main loop
@@ -166,9 +215,7 @@ class ExecutiveAgent:
             steps=32,
             rationale="Bootstrap: electrical integrity check",
         )
-        # Budget guard: bootstrap scan is 32 points — refuse if it would overshoot
-        if not self._measurement_fits(plan):
-            return bootstrap_result(device_responds=False, signal_detected=False)
+        plan = self._fit_plan_to_remaining_budget(plan)
 
         tr = self.translator.execute(plan)
         if tr.measurement is None:
@@ -194,9 +241,7 @@ class ExecutiveAgent:
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
 
-        # Budget guard: check before executing — a FINE_2D scan is 4096 points
-        if not self._measurement_fits(plan):
-            return survey_result(peak_found=False, peak_quality=0.0)
+        plan = self._fit_plan_to_remaining_budget(plan)
 
         tr = self.translator.execute(plan)
 
@@ -233,9 +278,7 @@ class ExecutiveAgent:
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
 
-        # Budget guard
-        if not self._measurement_fits(plan):
-            return charge_id_result("unknown", 0.0)
+        plan = self._fit_plan_to_remaining_budget(plan)
 
         tr = self.translator.execute(plan)
 
@@ -365,9 +408,7 @@ class ExecutiveAgent:
                 v2_range=(self.state.current_voltage.vg2 - 0.05, self.state.current_voltage.vg2 + 0.05),
             )
 
-            # Budget guard inside the loop — each iteration can take a new scan
-            if not self._measurement_fits(plan):
-                break
+            plan = self._fit_plan_to_remaining_budget(plan)
 
             tr = self.translator.execute(plan)
             if tr.measurement is None:
