@@ -115,8 +115,16 @@ class ActiveSensingPolicy:
         ]
 
         for modality in candidates:
-            ig = self._estimate_ig(belief, modality, v1_range, v2_range)
             cost = MODALITY_COST[modality]
+
+            # Cheap bound: IG cannot exceed prior entropy. If that upper bound
+            # on IG/cost already cannot beat the current best, skip simulation.
+            if np.isfinite(prior_entropy):
+                max_possible_score = prior_entropy / cost if cost > 0 else 0.0
+                if max_possible_score <= best_score:
+                    continue
+
+            ig = self._estimate_ig(belief, modality, v1_range, v2_range)
             score = ig / cost if cost > 0 else 0.0
 
             if score > best_score:

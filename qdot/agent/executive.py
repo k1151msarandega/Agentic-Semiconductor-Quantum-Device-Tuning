@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+
 import numpy as np
 
 from qdot.core.types import (
@@ -64,6 +65,7 @@ class ExecutiveAgent:
         self.inspection_agent = inspection_agent
         self.max_steps = max_steps
         self.measurement_budget = measurement_budget
+        self.control_steps = 0
 
         self.dqc = dqc or DQCGatekeeper()
         self.safety_critic = safety_critic or SafetyCritic(
@@ -439,6 +441,52 @@ class ExecutiveAgent:
             charge_noise=charge_noise,
         )
 
+    def _estimate_plan_cost(self, plan: MeasurementPlan) -> int:
+        """Estimate measurement points consumed by a plan."""
+        if plan.modality == MeasurementModality.NONE:
+            return 0
+        if plan.modality == MeasurementModality.LINE_SCAN:
+            return int(plan.steps or 128)
+        if plan.resolution is None:
+            return 0
+        return int(plan.resolution * plan.resolution)
+
+    def _fit_plan_to_remaining_budget(self, plan: MeasurementPlan) -> MeasurementPlan:
+        """Clamp or downgrade a plan so it cannot exceed remaining budget."""
+        remaining = self.measurement_budget - self.state.total_measurements
+        if remaining <= 0:
+            return MeasurementPlan(modality=MeasurementModality.NONE, rationale="Budget exhausted")
+
+        cost = self._estimate_plan_cost(plan)
+        if cost <= remaining:
+            return plan
+
+        if plan.modality == MeasurementModality.LINE_SCAN:
+            steps = max(2, min(int(plan.steps or 128), remaining))
+            if steps < 2:
+                return MeasurementPlan(modality=MeasurementModality.NONE, rationale="Insufficient budget for line scan")
+            return MeasurementPlan(
+                modality=MeasurementModality.LINE_SCAN,
+                axis=plan.axis or "vg1",
+                start=plan.start,
+                stop=plan.stop,
+                steps=steps,
+                rationale=f"{plan.rationale} (budget-clamped to {steps} steps)",
+                info_gain_per_cost=plan.info_gain_per_cost,
+            )
+
+        # Downgrade 2D scans to a line scan when remaining points cannot fit requested res^2
+        steps = max(2, min(128, remaining))
+        return MeasurementPlan(
+            modality=MeasurementModality.LINE_SCAN,
+            axis="vg1",
+            start=(plan.v1_range[0] if plan.v1_range else self.state.voltage_bounds["vg1"]["min"]),
+            stop=(plan.v1_range[1] if plan.v1_range else self.state.voltage_bounds["vg1"]["max"]),
+            steps=steps,
+            rationale=f"{plan.rationale} (downgraded to line scan due to budget)",
+            info_gain_per_cost=plan.info_gain_per_cost,
+        )
+
     # ------------------------------------------------------------------
     # HITL and governance
     # ------------------------------------------------------------------
@@ -496,7 +544,7 @@ class ExecutiveAgent:
 
     def _should_terminate(self) -> bool:
         return (
-            self.state.step >= self.max_steps
+            self.control_steps >= self.max_steps
             or self.state.total_measurements >= self.measurement_budget
             or self.state.stage in (TuningStage.COMPLETE, TuningStage.FAILED)
         )
@@ -507,7 +555,7 @@ class ExecutiveAgent:
         return {
             "success": self.state.stage == TuningStage.COMPLETE,
             "final_stage": self.state.stage.name,
-            "total_steps": self.state.step,
+            "total_steps": self.control_steps,
             "total_measurements": self.state.total_measurements,
             "measurement_reduction": reduction,
             "total_backtracks": self.state.total_backtracks,
