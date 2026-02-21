@@ -280,6 +280,29 @@ class TestActiveSensingPolicy:
             assert plan.v1_range is not None
             assert plan.v2_range is not None
 
+    def test_select_returns_best_non_none_plan_when_ig_positive(self):
+        """When IG/cost is above threshold, policy should not return NONE."""
+        state = make_state()
+        state.belief.initialise_uniform()
+        policy = ActiveSensingPolicy(n_mc_samples=2)
+
+        # Force deterministic IG values where LINE_SCAN should win.
+        ig_by_modality = {
+            MeasurementModality.LINE_SCAN: 1.0,
+            MeasurementModality.COARSE_2D: 0.5,
+            MeasurementModality.LOCAL_PATCH: 0.1,
+            MeasurementModality.FINE_2D: 0.05,
+        }
+
+        def fake_estimate_ig(_belief, modality, _v1, _v2):
+            return ig_by_modality[modality]
+
+        policy._estimate_ig = fake_estimate_ig
+
+        plan = policy.select(state.belief, (-0.5, 0.5), (-0.5, 0.5))
+        assert plan.modality == MeasurementModality.LINE_SCAN
+        assert plan.modality != MeasurementModality.NONE
+
 
 # ---------------------------------------------------------------------------
 # GaussianProcess and MultiResBO
