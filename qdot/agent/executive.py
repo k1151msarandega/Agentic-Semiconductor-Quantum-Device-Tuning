@@ -496,7 +496,7 @@ class ExecutiveAgent:
 
     def _should_terminate(self) -> bool:
         return (
-            self.state.step >= self.max_steps
+            self.control_steps >= self.max_steps
             or self.state.total_measurements >= self.measurement_budget
             or self.state.stage in (TuningStage.COMPLETE, TuningStage.FAILED)
         )
@@ -507,7 +507,7 @@ class ExecutiveAgent:
         return {
             "success": self.state.stage == TuningStage.COMPLETE,
             "final_stage": self.state.stage.name,
-            "total_steps": self.state.step,
+            "total_steps": self.control_steps,
             "total_measurements": self.state.total_measurements,
             "measurement_reduction": reduction,
             "total_backtracks": self.state.total_backtracks,
