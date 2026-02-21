@@ -64,6 +64,7 @@ class ExecutiveAgent:
         self.inspection_agent = inspection_agent
         self.max_steps = max_steps
         self.measurement_budget = measurement_budget
+        self.control_steps = 0
 
         self.dqc = dqc or DQCGatekeeper()
         self.safety_critic = safety_critic or SafetyCritic(
@@ -174,6 +175,7 @@ class ExecutiveAgent:
         return self._mission_summary()
 
     def _step(self) -> None:
+        self.control_steps += 1
         stage = self.state.stage
 
         if stage == TuningStage.BOOTSTRAPPING:
