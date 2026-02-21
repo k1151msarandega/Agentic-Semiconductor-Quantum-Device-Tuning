@@ -49,12 +49,12 @@ class ConstantInteractionDevice:
 
     def __init__(
         self,
-        E_c1: float = 2.0,
-        E_c2: float = 2.2,
-        t_c: float = 0.30,
-        T: float = 0.05,
-        lever_arm: float = 0.80,
-        noise_level: float = 0.008,
+        E_c1: float = 0.50,
+        E_c2: float = 0.55,
+        t_c: float = 0.05,
+        T: float = 0.015,
+        lever_arm: float = 1.0,
+        noise_level: float = 0.01,
         seed: Optional[int] = None,
     ) -> None:
         """
@@ -62,8 +62,16 @@ class ConstantInteractionDevice:
             E_c1: Charging energy dot 1 (meV)
             E_c2: Charging energy dot 2 (meV)
             t_c: Tunnel coupling (meV)
-            T: Temperature (meV; ~0.6 K for 0.05 meV)
-            lever_arm: Gate voltage to energy conversion (dimensionless)
+            T: Temperature (meV; ~0.17 K for 0.015 meV)
+            lever_arm: Gate voltage to energy conversion (meV/V).
+                       CRITICAL PARAMETER: charge degeneracy occurs at
+                       vg = -E_c / lever_arm.  With the default voltage
+                       bounds of [-1, 1] V, we need lever_arm ≥ E_c so
+                       that degeneracy points lie inside the scan range.
+                       Default lever_arm=1.0 with E_c≈0.5 puts the
+                       (0,0)↔(1,0) transition at -0.5 V and the
+                       (0,0)↔(0,1) transition at -0.55 V — both well
+                       within the accessible voltage window.
             noise_level: Gaussian noise standard deviation
             seed: Random seed for reproducibility
 
@@ -259,12 +267,12 @@ class CIMSimulatorAdapter(DeviceAdapter):
     """
 
     DEFAULT_PARAMS = {
-        "E_c1": 2.0,
-        "E_c2": 2.2,
-        "t_c": 0.30,
-        "T": 0.05,
-        "lever_arm": 0.80,
-        "noise_level": 0.008,
+        "E_c1": 0.50,
+        "E_c2": 0.55,
+        "t_c": 0.05,
+        "T": 0.015,
+        "lever_arm": 1.0,
+        "noise_level": 0.01,
     }
 
     def __init__(
