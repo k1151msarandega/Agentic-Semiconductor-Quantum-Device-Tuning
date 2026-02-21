@@ -175,15 +175,28 @@ class StateMachine:
         if config is None:
             return stage, f"No config for stage {stage.name}", False
 
-        # Check HITL triggers first (blueprint §4, conditions 8 and 9)
-        hitl, hitl_reason = self._check_hitl(stage, config)
-        if hitl:
-            return stage, hitl_reason, True
-
-        # Can we advance?
+        # ---------------------------------------------------------------
+        # SUCCESS CHECK MUST COME BEFORE HITL CHECK.
+        #
+        # Bug: original code checked HITL first, so once consecutive_backtracks
+        # reached 2 the HITL gate fired every step — even when the result was a
+        # success — because _advance() (which calls advance_stage() and resets
+        # consecutive_backtracks) was never reached.  This created a permanent
+        # HITL loop: the counter that would clear the trigger was behind the
+        # trigger it caused.
+        #
+        # Correct order: if this result is good enough to advance, do so
+        # immediately.  HITL is only relevant when the result is NOT good.
+        # ---------------------------------------------------------------
         if result.success and result.confidence >= config.success_threshold:
             new_stage, rationale = self._advance(stage, result)
             return new_stage, rationale, False
+
+        # Result was not good enough to advance — now check HITL conditions
+        # (blueprint §4, conditions 8 and 9)
+        hitl, hitl_reason = self._check_hitl(stage, config)
+        if hitl:
+            return stage, hitl_reason, True
 
         # Should we backtrack?
         if self._retries[stage] >= config.max_retries:
