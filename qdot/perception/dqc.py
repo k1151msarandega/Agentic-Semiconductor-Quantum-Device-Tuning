@@ -173,8 +173,9 @@ class DQCGatekeeper:
         (captures the structured conductance features).
         Noise power: variance of the residual (arr - smoothed).
 
-        Uses a simple 3×3 mean filter for smoothing. For 1D arrays,
-        uses a 3-point moving average.
+        Uses a 3-point kernel / 3×3 mean filter for smoothing. This keeps
+        CIM Lorentzian peaks (typically a few pixels wide) from being overly
+        blurred into baseline while still estimating high-frequency residuals.
         """
         if arr.ndim == 1:
             # 1D line scan
@@ -244,7 +245,11 @@ class DQCGatekeeper:
         notes_parts = []
 
         # Hard LOW conditions
-        if snr_db < self.snr_low:
+        # Dynamic-range bypass for 2D patches: when contrast is very high,
+        # allow MODERATE/HIGH even if the simple variance-SNR estimator is low.
+        # This avoids rejecting real stability diagrams where structured lines
+        # can be treated as residual by the mean-filter SNR proxy.
+        if snr_db < self.snr_low and dynamic_range < 0.8:
             return DQCQuality.LOW, f"SNR={snr_db:.1f} dB < {self.snr_low} dB threshold."
 
         if not physically_plausible:
