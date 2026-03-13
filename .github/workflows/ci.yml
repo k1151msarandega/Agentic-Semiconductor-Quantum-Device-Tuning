@@ -96,17 +96,37 @@ jobs:
         continue-on-error: true   # coverage target is aspirational during active dev
 
       # ------------------------------------------------------------------
-      # Phase 2 benchmark (fast mode: infrastructure testing only)
-      # This validates that the agent loop runs without crashing.
-      # Full 100-trial benchmark must be run locally to validate paper claims.
-      # NOTE: Only runs on main branch pushes to avoid slowing down PRs
+      # Phase 2 benchmark (fast mode)
+      # Attempts to download the trained Phase 1 checkpoint published by
+      # train.yml.  Falls back to stub mode gracefully if none exists yet.
+      # Only runs on main branch pushes (3.11 matrix only) to avoid
+      # slowing down PRs.
       # ------------------------------------------------------------------
+      - name: Download Phase 1 checkpoint (cross-workflow)
+        id: checkpoint
+        if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: train.yml
+          name: phase1-checkpoint-latest
+          path: experiments/checkpoints/phase1/
+          if_no_artifact_found: ignore   # graceful fallback to stub mode
+        continue-on-error: true
+
+      - name: Report checkpoint status
+        if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
+        run: |
+          if [ -f "experiments/checkpoints/phase1/model_0.pt" ]; then
+            echo "Trained checkpoint loaded — benchmark will use real classifier"
+          else
+            echo "No checkpoint found — benchmark running in stub mode (smoke test only)"
+          fi
+
       - name: Phase 2 benchmark (fast mode)
         if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
         run: |
           python experiments/benchmark_phase2.py \
             --fast \
-            --skip-missing-checkpoints \
             --out /tmp/phase2_benchmark
         timeout-minutes: 200
         continue-on-error: true   # benchmark is informational until fully integrated

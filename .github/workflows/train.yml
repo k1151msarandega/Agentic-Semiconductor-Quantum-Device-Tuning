@@ -1,0 +1,58 @@
+name: Train Phase 1 Classifier
+
+on:
+  workflow_dispatch:        # manual trigger from Actions UI
+  schedule:
+    - cron: '0 2 * * 0'    # weekly, Sunday 02:00 UTC
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install numpy scipy pytest pytest-cov ruff
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install scikit-learn scikit-optimize joblib opencv-python
+          pip install -e . --no-deps
+
+      - name: Train Phase 1 ensemble + OOD detector
+        run: python experiments/train_phase1.py --out experiments/checkpoints/phase1
+        # No --fast flag — full training run (~30-60 min)
+
+      - name: Verify checkpoint files exist
+        run: |
+          for f in model_0.pt model_1.pt model_2.pt model_3.pt model_4.pt ood_detector.pkl training_log.json; do
+            test -f "experiments/checkpoints/phase1/$f" || (echo "Missing: $f" && exit 1)
+          done
+          echo "All checkpoint files present"
+
+      - name: Print training summary
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib
+          log = json.loads(pathlib.Path('experiments/checkpoints/phase1/training_log.json').read_text())
+          results = log.get('results', {})
+          config  = log.get('config', {})
+          print('Val accuracy (CIM):', results.get('val_accuracy_cim', 'n/a'))
+          print('Epochs:',             config.get('n_epochs', 'n/a'))
+          print('Timestamp:',          log.get('timestamp', 'n/a'))
+          PYEOF
+
+      - name: Upload checkpoint artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-checkpoint-latest
+          path: experiments/checkpoints/phase1/
+          retention-days: 90
+          if-no-files-found: error
