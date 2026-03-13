@@ -122,12 +122,16 @@ class CIMObservationModel:
             seed: Random seed for the CIM device.
         """
         params = device_params or {}
+        # Fallback values must match ConstantInteractionDevice defaults so the
+        # observation model and the simulator agree when device_params is None.
+        # Degeneracy check: -E_c/lever_arm must fall in [-1, 1] V.
+        # With E_c≈0.5 and lever_arm=1.0, crossings are at ≈-0.5 V (in range).
         self.device = ConstantInteractionDevice(
-            E_c1=params.get("E_c1", 2.3),
-            E_c2=params.get("E_c2", 2.5),
-            t_c=params.get("t_c", 0.15),
-            T=params.get("T", 0.1),
-            lever_arm=params.get("lever_arm", 0.5),
+            E_c1=params.get("E_c1", 0.50),
+            E_c2=params.get("E_c2", 0.55),
+            t_c=params.get("t_c", 0.05),
+            T=params.get("T", 0.015),
+            lever_arm=params.get("lever_arm", 1.0),
             noise_level=0.0,   # Noise is handled separately in likelihood
             seed=seed,
         )
