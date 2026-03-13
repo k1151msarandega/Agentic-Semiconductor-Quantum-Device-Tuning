@@ -212,10 +212,10 @@ class ExecutiveAgent:
         plan = MeasurementPlan(
             modality=MeasurementModality.LINE_SCAN,
             axis="vg1",
-            start=self.state.voltage_bounds["vg1"]["min"] * 0.5,
-            stop=self.state.voltage_bounds["vg1"]["max"] * 0.5,
+            start=self.state.voltage_bounds["vg1"]["min"],
+            stop=self.state.voltage_bounds["vg1"]["max"],
             steps=32,
-            rationale="Bootstrap: electrical integrity check",
+            rationale="Bootstrap: electrical integrity check across full voltage range",
         )
         plan = self._fit_plan_to_remaining_budget(plan)
 
