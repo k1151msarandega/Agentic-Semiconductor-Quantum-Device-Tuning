@@ -1,6 +1,9 @@
 name: Train Phase 1 Classifier
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * 0'
   workflow_dispatch:        # manual trigger from Actions UI
   schedule:
     - cron: '0 2 * * 0'    # weekly, Sunday 02:00 UTC
@@ -40,6 +43,14 @@ jobs:
       - name: Print training summary
         run: |
           python - <<'PYEOF'
+          import json
+          import pathlib
+          log = json.loads(pathlib.Path('experiments/checkpoints/phase1/training_log.json').read_text())
+          results = log.get('results', {})
+          config = log.get('config', {})
+          print('Val accuracy (CIM):', results.get('val_accuracy_cim', 'n/a'))
+          print('Epochs:', config.get('n_epochs', 'n/a'))
+          print('Timestamp:', log.get('timestamp', 'n/a'))
           import json, pathlib
           log = json.loads(pathlib.Path('experiments/checkpoints/phase1/training_log.json').read_text())
           results = log.get('results', {})

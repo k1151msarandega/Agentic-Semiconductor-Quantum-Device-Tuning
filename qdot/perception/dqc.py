@@ -173,6 +173,9 @@ class DQCGatekeeper:
         (captures the structured conductance features).
         Noise power: variance of the residual (arr - smoothed).
 
+        Uses a 3-point kernel / 3×3 mean filter for smoothing. This keeps
+        CIM Lorentzian peaks (typically a few pixels wide) from being overly
+        blurred into baseline while still estimating high-frequency residuals.
         Uses a 3-point kernel — optimal for CIM Lorentzian peaks, which are
         typically 3-5 pixels wide at the resolutions used (32+ pts per axis).
         A wider kernel would blur the peak into the baseline and lower SNR.
@@ -245,6 +248,10 @@ class DQCGatekeeper:
         notes_parts = []
 
         # Hard LOW conditions
+        # Dynamic-range bypass for 2D patches: when contrast is very high,
+        # allow MODERATE/HIGH even if the simple variance-SNR estimator is low.
+        # This avoids rejecting real stability diagrams where structured lines
+        # can be treated as residual by the mean-filter SNR proxy.
         # Dynamic-range bypass: if the array spans ≥80% of its full range the
         # data unambiguously has real contrast.  The variance-based SNR estimator
         # is unreliable for 2-D stability diagrams where Coulomb lines occupy

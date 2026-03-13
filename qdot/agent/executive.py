@@ -8,8 +8,10 @@ inserted before each measurement acquisition.)
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Optional
+
 
 import numpy as np
 
@@ -175,6 +177,7 @@ class ExecutiveAgent:
         return self._mission_summary()
 
     def _step(self) -> None:
+        """Execute one iteration of the main agent loop."""
         self.control_steps += 1
         stage = self.state.stage
 
@@ -242,6 +245,7 @@ class ExecutiveAgent:
         )
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
+        plan = self._fit_plan_to_remaining_budget(plan)
 
         plan = self._fit_plan_to_remaining_budget(plan)
 
@@ -279,6 +283,7 @@ class ExecutiveAgent:
         )
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
+        plan = self._fit_plan_to_remaining_budget(plan)
 
         plan = self._fit_plan_to_remaining_budget(plan)
 
@@ -409,6 +414,7 @@ class ExecutiveAgent:
                 v1_range=(self.state.current_voltage.vg1 - 0.05, self.state.current_voltage.vg1 + 0.05),
                 v2_range=(self.state.current_voltage.vg2 - 0.05, self.state.current_voltage.vg2 + 0.05),
             )
+            plan = self._fit_plan_to_remaining_budget(plan)
 
             plan = self._fit_plan_to_remaining_budget(plan)
 
@@ -439,6 +445,80 @@ class ExecutiveAgent:
             stable=(confirmations >= 2),
             reproducibility=reproducibility,
             charge_noise=charge_noise,
+        )
+
+    def _estimate_plan_cost(self, plan: MeasurementPlan) -> int:
+        """Estimate measurement points consumed by a plan."""
+        if plan.modality == MeasurementModality.NONE:
+            return 0
+        if plan.modality == MeasurementModality.LINE_SCAN:
+            return int(plan.steps or 128)
+        if plan.resolution is None:
+            return 0
+        return int(plan.resolution * plan.resolution)
+
+    def _fit_plan_to_remaining_budget(self, plan: MeasurementPlan) -> MeasurementPlan:
+        """Clamp or downgrade a plan so it cannot exceed remaining budget."""
+        remaining = self.measurement_budget - self.state.total_measurements
+        if remaining <= 0:
+            return MeasurementPlan(modality=MeasurementModality.NONE, rationale="Budget exhausted")
+
+        cost = self._estimate_plan_cost(plan)
+        if cost <= remaining:
+            return plan
+
+        if plan.modality == MeasurementModality.LINE_SCAN:
+            steps = max(2, min(int(plan.steps or 128), remaining))
+            if steps < 2:
+                return MeasurementPlan(modality=MeasurementModality.NONE, rationale="Insufficient budget for line scan")
+            return MeasurementPlan(
+                modality=MeasurementModality.LINE_SCAN,
+                axis=plan.axis or "vg1",
+                start=plan.start,
+                stop=plan.stop,
+                steps=steps,
+                rationale=f"{plan.rationale} (budget-clamped to {steps} steps)",
+                info_gain_per_cost=plan.info_gain_per_cost,
+            )
+
+        # 2D scan doesn't fit at requested resolution.
+        # Try progressively smaller 2D resolutions before falling to 1D.
+        v1_range = plan.v1_range or (
+            self.state.voltage_bounds["vg1"]["min"],
+            self.state.voltage_bounds["vg1"]["max"],
+        )
+        v2_range = plan.v2_range or (
+            self.state.voltage_bounds["vg2"]["min"],
+            self.state.voltage_bounds["vg2"]["max"],
+        )
+
+        requested_res = int(plan.resolution or math.isqrt(max(cost, 1)))
+        min_res = 8
+        max_fit_res = int(math.isqrt(remaining))
+        res = min(requested_res, max_fit_res)
+
+        if res >= min_res:
+            return MeasurementPlan(
+                modality=plan.modality,
+                v1_range=v1_range,
+                v2_range=v2_range,
+                resolution=res,
+                rationale=(
+                    f"{plan.rationale} (resolution reduced {requested_res}→{res} to fit budget)"
+                ),
+                info_gain_per_cost=plan.info_gain_per_cost,
+            )
+
+        # Even 8×8 doesn't fit — fall back to a line scan
+        steps = max(2, min(128, remaining))
+        return MeasurementPlan(
+            modality=MeasurementModality.LINE_SCAN,
+            axis="vg1",
+            start=v1_range[0],
+            stop=v1_range[1],
+            steps=steps,
+            rationale=f"{plan.rationale} (downgraded to {steps}-pt line scan; budget remaining={remaining})",
+            info_gain_per_cost=plan.info_gain_per_cost,
         )
 
     # ------------------------------------------------------------------
