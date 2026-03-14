@@ -118,6 +118,31 @@ jobs:
       - name: Check Phase 1 checkpoint presence
         if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
         run: |
+          set -u
+          CKPT_DIR="experiments/checkpoints/phase1"
+          echo "Checkpoint directory contents:"
+          if [ -d "$CKPT_DIR" ]; then
+            ls -lah "$CKPT_DIR"
+          else
+            echo "Directory not found: $CKPT_DIR"
+          fi
+
+          missing=""
+          for f in model_0.pt model_1.pt model_2.pt model_3.pt model_4.pt ood_detector.pkl training_log.json; do
+            if [ ! -f "$CKPT_DIR/$f" ]; then
+              missing="$missing $f"
+            fi
+          done
+
+          if [ -z "$missing" ]; then
+            echo "CHECKPOINT_READY=1" >> "$GITHUB_ENV"
+            echo "Trained checkpoint loaded - benchmark will use real classifier"
+          else
+            for f in $missing; do
+              echo "Missing: $f"
+            done
+            echo "CHECKPOINT_READY=0" >> "$GITHUB_ENV"
+            echo "No checkpoint found - benchmark running in stub mode (smoke test only)"
           echo "Checkpoint directory contents:"
           ls -lah experiments/checkpoints/phase1 || true
           missing=0
