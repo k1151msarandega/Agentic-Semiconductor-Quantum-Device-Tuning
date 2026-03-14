@@ -8,6 +8,7 @@ inserted before each measurement acquisition.)
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Optional
 
@@ -176,6 +177,8 @@ class ExecutiveAgent:
         return self._mission_summary()
 
     def _step(self) -> None:
+        """Execute one iteration of the main agent loop."""
+        self.control_steps += 1
         stage = self.state.stage
 
         if stage == TuningStage.BOOTSTRAPPING:
@@ -212,10 +215,10 @@ class ExecutiveAgent:
         plan = MeasurementPlan(
             modality=MeasurementModality.LINE_SCAN,
             axis="vg1",
-            start=self.state.voltage_bounds["vg1"]["min"] * 0.5,
-            stop=self.state.voltage_bounds["vg1"]["max"] * 0.5,
+            start=self.state.voltage_bounds["vg1"]["min"],
+            stop=self.state.voltage_bounds["vg1"]["max"],
             steps=32,
-            rationale="Bootstrap: electrical integrity check",
+            rationale="Bootstrap: electrical integrity check across full voltage range",
         )
         plan = self._fit_plan_to_remaining_budget(plan)
 
@@ -242,6 +245,7 @@ class ExecutiveAgent:
         )
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
+        plan = self._fit_plan_to_remaining_budget(plan)
 
         plan = self._fit_plan_to_remaining_budget(plan)
 
@@ -279,6 +283,7 @@ class ExecutiveAgent:
         )
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
+        plan = self._fit_plan_to_remaining_budget(plan)
 
         plan = self._fit_plan_to_remaining_budget(plan)
 
@@ -409,6 +414,7 @@ class ExecutiveAgent:
                 v1_range=(self.state.current_voltage.vg1 - 0.05, self.state.current_voltage.vg1 + 0.05),
                 v2_range=(self.state.current_voltage.vg2 - 0.05, self.state.current_voltage.vg2 + 0.05),
             )
+            plan = self._fit_plan_to_remaining_budget(plan)
 
             plan = self._fit_plan_to_remaining_budget(plan)
 
@@ -475,15 +481,54 @@ class ExecutiveAgent:
                 info_gain_per_cost=plan.info_gain_per_cost,
             )
 
+<<<<<<< codex/determine-cause-of-phase-2-benchmark-failure
         # Downgrade 2D scans to a line scan when remaining points cannot fit requested res^2
+=======
+        # 2D scan doesn't fit at requested resolution.
+        # Try progressively smaller 2D resolutions before falling to 1D.
+        v1_range = plan.v1_range or (
+            self.state.voltage_bounds["vg1"]["min"],
+            self.state.voltage_bounds["vg1"]["max"],
+        )
+        v2_range = plan.v2_range or (
+            self.state.voltage_bounds["vg2"]["min"],
+            self.state.voltage_bounds["vg2"]["max"],
+        )
+
+        requested_res = int(plan.resolution or math.isqrt(max(cost, 1)))
+        min_res = 8
+        max_fit_res = int(math.isqrt(remaining))
+        res = min(requested_res, max_fit_res)
+
+        if res >= min_res:
+            return MeasurementPlan(
+                modality=plan.modality,
+                v1_range=v1_range,
+                v2_range=v2_range,
+                resolution=res,
+                rationale=(
+                    f"{plan.rationale} (resolution reduced {requested_res}→{res} to fit budget)"
+                ),
+                info_gain_per_cost=plan.info_gain_per_cost,
+            )
+
+        # Even 8×8 doesn't fit — fall back to a line scan
+>>>>>>> main
         steps = max(2, min(128, remaining))
         return MeasurementPlan(
             modality=MeasurementModality.LINE_SCAN,
             axis="vg1",
+<<<<<<< codex/determine-cause-of-phase-2-benchmark-failure
             start=(plan.v1_range[0] if plan.v1_range else self.state.voltage_bounds["vg1"]["min"]),
             stop=(plan.v1_range[1] if plan.v1_range else self.state.voltage_bounds["vg1"]["max"]),
             steps=steps,
             rationale=f"{plan.rationale} (downgraded to line scan due to budget)",
+=======
+            start=v1_range[0],
+            stop=v1_range[1],
+            steps=steps,
+            rationale=f"{plan.rationale} (downgraded to {steps}-pt line scan; budget remaining={remaining})",
+>>>>>>> main
             info_gain_per_cost=plan.info_gain_per_cost,
         )
 

@@ -42,8 +42,8 @@ MODALITY_COST: Dict[MeasurementModality, int] = {
 
 MODALITY_RESOLUTION: Dict[MeasurementModality, int] = {
     MeasurementModality.LINE_SCAN:   128,
-    MeasurementModality.COARSE_2D:   16,
-    MeasurementModality.LOCAL_PATCH: 32,
+    MeasurementModality.COARSE_2D:   32,
+    MeasurementModality.LOCAL_PATCH: 48,
     MeasurementModality.FINE_2D:     64,
 }
 
