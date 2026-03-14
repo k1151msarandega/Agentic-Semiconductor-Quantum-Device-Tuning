@@ -481,6 +481,9 @@ class ExecutiveAgent:
                 info_gain_per_cost=plan.info_gain_per_cost,
             )
 
+<<<<<<< codex/determine-cause-of-phase-2-benchmark-failure
+        # Downgrade 2D scans to a line scan when remaining points cannot fit requested res^2
+=======
         # 2D scan doesn't fit at requested resolution.
         # Try progressively smaller 2D resolutions before falling to 1D.
         v1_range = plan.v1_range or (
@@ -510,14 +513,22 @@ class ExecutiveAgent:
             )
 
         # Even 8×8 doesn't fit — fall back to a line scan
+>>>>>>> main
         steps = max(2, min(128, remaining))
         return MeasurementPlan(
             modality=MeasurementModality.LINE_SCAN,
             axis="vg1",
+<<<<<<< codex/determine-cause-of-phase-2-benchmark-failure
+            start=(plan.v1_range[0] if plan.v1_range else self.state.voltage_bounds["vg1"]["min"]),
+            stop=(plan.v1_range[1] if plan.v1_range else self.state.voltage_bounds["vg1"]["max"]),
+            steps=steps,
+            rationale=f"{plan.rationale} (downgraded to line scan due to budget)",
+=======
             start=v1_range[0],
             stop=v1_range[1],
             steps=steps,
             rationale=f"{plan.rationale} (downgraded to {steps}-pt line scan; budget remaining={remaining})",
+>>>>>>> main
             info_gain_per_cost=plan.info_gain_per_cost,
         )
 
