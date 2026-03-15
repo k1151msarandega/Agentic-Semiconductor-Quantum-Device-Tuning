@@ -2,8 +2,6 @@
 qdot/agent/executive.py
 ========================
 Executive Agent — main agent loop orchestrator.
-(Same as original — only _measurement_fits() helper added and budget guards
-inserted before each measurement acquisition.)
 """
 
 from __future__ import annotations
@@ -89,77 +87,6 @@ class ExecutiveAgent:
         self.translator = TranslationAgent(adapter=adapter)
 
     # ------------------------------------------------------------------
-    # Budget guard
-    # ------------------------------------------------------------------
-
-    def _estimate_plan_cost(self, plan: MeasurementPlan) -> int:
-        """
-        Estimate measurement points consumed by a plan.
-
-        Mirrors ExperimentState._update_measurement_count() exactly so the
-        guard and the actual counter always agree.
-        """
-        if plan.modality == MeasurementModality.NONE:
-            return 0
-        if plan.modality == MeasurementModality.LINE_SCAN:
-            return int(plan.steps or 128)
-        if plan.resolution is None:
-            return 0
-        return int(plan.resolution * plan.resolution)
-
-    def _fit_plan_to_remaining_budget(self, plan: MeasurementPlan) -> MeasurementPlan:
-        """
-        Clamp or downgrade a plan so it cannot exceed the remaining measurement budget.
-
-        Strategy:
-          - Line scan: clamp steps to remaining points (minimum 2).
-          - 2D scan:   if it fits, keep as-is.  Otherwise downgrade to a line
-                       scan bounded by remaining points.  This preserves *some*
-                       measurement even at the budget boundary instead of
-                       discarding the step entirely.
-          - Budget exhausted: return NONE.
-
-        Using actual plan cost (steps or resolution²) rather than the cost-table
-        estimate ensures tight agreement with state._update_measurement_count().
-        """
-        remaining = self.measurement_budget - self.state.total_measurements
-        if remaining <= 0:
-            return MeasurementPlan(
-                modality=MeasurementModality.NONE,
-                rationale="Budget exhausted",
-            )
-
-        cost = self._estimate_plan_cost(plan)
-        if cost <= remaining:
-            return plan  # fits — no change needed
-
-        if plan.modality == MeasurementModality.LINE_SCAN:
-            steps = max(2, min(int(plan.steps or 128), remaining))
-            return MeasurementPlan(
-                modality=MeasurementModality.LINE_SCAN,
-                axis=plan.axis or "vg1",
-                start=plan.start,
-                stop=plan.stop,
-                steps=steps,
-                rationale=f"{plan.rationale} (budget-clamped to {steps} steps)",
-                info_gain_per_cost=plan.info_gain_per_cost,
-            )
-
-        # 2D scan doesn't fit: downgrade to a line scan
-        steps = max(2, min(128, remaining))
-        v1_min = self.state.voltage_bounds["vg1"]["min"]
-        v1_max = self.state.voltage_bounds["vg1"]["max"]
-        return MeasurementPlan(
-            modality=MeasurementModality.LINE_SCAN,
-            axis="vg1",
-            start=(plan.v1_range[0] if plan.v1_range else v1_min),
-            stop=(plan.v1_range[1] if plan.v1_range else v1_max),
-            steps=steps,
-            rationale=f"{plan.rationale} (downgraded to {steps}-pt line scan; budget remaining={remaining})",
-            info_gain_per_cost=plan.info_gain_per_cost,
-        )
-
-    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
@@ -217,7 +144,7 @@ class ExecutiveAgent:
             axis="vg1",
             start=self.state.voltage_bounds["vg1"]["min"],
             stop=self.state.voltage_bounds["vg1"]["max"],
-            steps=32,
+            steps=64,
             rationale="Bootstrap: electrical integrity check across full voltage range",
         )
         plan = self._fit_plan_to_remaining_budget(plan)
@@ -245,8 +172,6 @@ class ExecutiveAgent:
         )
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
-        plan = self._fit_plan_to_remaining_budget(plan)
-
         plan = self._fit_plan_to_remaining_budget(plan)
 
         tr = self.translator.execute(plan)
@@ -283,8 +208,6 @@ class ExecutiveAgent:
         )
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
-        plan = self._fit_plan_to_remaining_budget(plan)
-
         plan = self._fit_plan_to_remaining_budget(plan)
 
         tr = self.translator.execute(plan)
@@ -382,9 +305,7 @@ class ExecutiveAgent:
 
         most_likely = self.state.belief.most_likely_state()
         target_reached = (most_likely == (1, 1))
-        belief_confidence = (
-            self.state.belief.charge_probs.get((1, 1), 0.0)
-        )
+        belief_confidence = self.state.belief.charge_probs.get((1, 1), 0.0)
 
         self._log_decision(
             intent="voltage_move",
@@ -416,8 +337,6 @@ class ExecutiveAgent:
             )
             plan = self._fit_plan_to_remaining_budget(plan)
 
-            plan = self._fit_plan_to_remaining_budget(plan)
-
             tr = self.translator.execute(plan)
             if tr.measurement is None:
                 continue
@@ -447,6 +366,10 @@ class ExecutiveAgent:
             charge_noise=charge_noise,
         )
 
+    # ------------------------------------------------------------------
+    # Budget guard
+    # ------------------------------------------------------------------
+
     def _estimate_plan_cost(self, plan: MeasurementPlan) -> int:
         """Estimate measurement points consumed by a plan."""
         if plan.modality == MeasurementModality.NONE:
@@ -458,10 +381,20 @@ class ExecutiveAgent:
         return int(plan.resolution * plan.resolution)
 
     def _fit_plan_to_remaining_budget(self, plan: MeasurementPlan) -> MeasurementPlan:
-        """Clamp or downgrade a plan so it cannot exceed remaining budget."""
+        """
+        Clamp or downgrade a plan so it cannot exceed remaining budget.
+
+        - Line scan: clamp steps to remaining points (min 2).
+        - 2D scan:   reduce resolution to largest res where res² fits;
+                     fall back to line scan only if even 8×8 doesn't fit.
+        - Budget exhausted: return NONE.
+        """
         remaining = self.measurement_budget - self.state.total_measurements
         if remaining <= 0:
-            return MeasurementPlan(modality=MeasurementModality.NONE, rationale="Budget exhausted")
+            return MeasurementPlan(
+                modality=MeasurementModality.NONE,
+                rationale="Budget exhausted",
+            )
 
         cost = self._estimate_plan_cost(plan)
         if cost <= remaining:
@@ -469,8 +402,6 @@ class ExecutiveAgent:
 
         if plan.modality == MeasurementModality.LINE_SCAN:
             steps = max(2, min(int(plan.steps or 128), remaining))
-            if steps < 2:
-                return MeasurementPlan(modality=MeasurementModality.NONE, rationale="Insufficient budget for line scan")
             return MeasurementPlan(
                 modality=MeasurementModality.LINE_SCAN,
                 axis=plan.axis or "vg1",
@@ -481,9 +412,7 @@ class ExecutiveAgent:
                 info_gain_per_cost=plan.info_gain_per_cost,
             )
 
-        # Downgrade 2D scans to a line scan when remaining points cannot fit requested res^2
-        # 2D scan doesn't fit at requested resolution.
-        # Try progressively smaller 2D resolutions before falling to 1D.
+        # 2D scan doesn't fit at requested resolution — try smaller 2D first.
         v1_range = plan.v1_range or (
             self.state.voltage_bounds["vg1"]["min"],
             self.state.voltage_bounds["vg1"]["max"],
@@ -494,31 +423,27 @@ class ExecutiveAgent:
         )
 
         requested_res = int(plan.resolution or math.isqrt(max(cost, 1)))
-        min_res = 8
         max_fit_res = int(math.isqrt(remaining))
         res = min(requested_res, max_fit_res)
 
-        if res >= min_res:
+        if res >= 8:
             return MeasurementPlan(
                 modality=plan.modality,
                 v1_range=v1_range,
                 v2_range=v2_range,
                 resolution=res,
                 rationale=(
-                    f"{plan.rationale} (resolution reduced {requested_res}→{res} to fit budget)"
+                    f"{plan.rationale} "
+                    f"(resolution reduced {requested_res}→{res} to fit budget)"
                 ),
                 info_gain_per_cost=plan.info_gain_per_cost,
             )
 
-        # Even 8×8 doesn't fit — fall back to a line scan
+        # Even 8×8 doesn't fit — fall back to line scan.
         steps = max(2, min(128, remaining))
         return MeasurementPlan(
             modality=MeasurementModality.LINE_SCAN,
             axis="vg1",
-            start=(plan.v1_range[0] if plan.v1_range else self.state.voltage_bounds["vg1"]["min"]),
-            stop=(plan.v1_range[1] if plan.v1_range else self.state.voltage_bounds["vg1"]["max"]),
-            steps=steps,
-            rationale=f"{plan.rationale} (downgraded to line scan due to budget)",
             start=v1_range[0],
             stop=v1_range[1],
             steps=steps,
