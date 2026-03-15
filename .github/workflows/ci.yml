@@ -98,9 +98,7 @@ jobs:
       # ------------------------------------------------------------------
       # Phase 2 benchmark (fast mode)
       # Attempts cross-workflow checkpoint download from train.yml.
-      # Falls back to stub mode if artifact is unavailable.
-      # Attempts to download the trained Phase 1 checkpoint published by
-      # train.yml.  Falls back to stub mode gracefully if none exists yet.
+      # Falls back to stub mode gracefully if artifact is unavailable.
       # Only runs on main branch pushes (3.11 matrix only) to avoid
       # slowing down PRs.
       # ------------------------------------------------------------------
@@ -115,58 +113,16 @@ jobs:
           if_no_artifact_found: ignore
         continue-on-error: true
 
-      - name: Check Phase 1 checkpoint presence
-        if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
-        run: |
-          set -u
-          CKPT_DIR="experiments/checkpoints/phase1"
-          echo "Checkpoint directory contents:"
-          if [ -d "$CKPT_DIR" ]; then
-            ls -lah "$CKPT_DIR"
-          else
-            echo "Directory not found: $CKPT_DIR"
-          fi
-
-          missing=""
-          for f in model_0.pt model_1.pt model_2.pt model_3.pt model_4.pt ood_detector.pkl training_log.json; do
-            if [ ! -f "$CKPT_DIR/$f" ]; then
-              missing="$missing $f"
-            fi
-          done
-
-          if [ -z "$missing" ]; then
-            echo "CHECKPOINT_READY=1" >> "$GITHUB_ENV"
-            echo "Trained checkpoint loaded - benchmark will use real classifier"
-          else
-            for f in $missing; do
-              echo "Missing: $f"
-            done
-            echo "CHECKPOINT_READY=0" >> "$GITHUB_ENV"
-            echo "No checkpoint found - benchmark running in stub mode (smoke test only)"
-          echo "Checkpoint directory contents:"
-          ls -lah experiments/checkpoints/phase1 || true
-          missing=0
-          for f in model_0.pt model_1.pt model_2.pt model_3.pt model_4.pt ood_detector.pkl training_log.json; do
-            if [ ! -f "experiments/checkpoints/phase1/$f" ]; then
-              echo "Missing: $f"
-              missing=1
-            fi
-          done
-          if [ "$missing" -eq 0 ]; then
-            echo "CHECKPOINT_READY=1" >> "$GITHUB_ENV"
-            echo "Trained checkpoint loaded — benchmark will use real classifier"
-          else
-            echo "CHECKPOINT_READY=0" >> "$GITHUB_ENV"
-          if_no_artifact_found: ignore   # graceful fallback to stub mode
-        continue-on-error: true
-
       - name: Report checkpoint status
         if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
+        continue-on-error: true
         run: |
           if [ -f "experiments/checkpoints/phase1/model_0.pt" ]; then
             echo "Trained checkpoint loaded — benchmark will use real classifier"
+            echo "CHECKPOINT_READY=1" >> "$GITHUB_ENV"
           else
             echo "No checkpoint found — benchmark running in stub mode (smoke test only)"
+            echo "CHECKPOINT_READY=0" >> "$GITHUB_ENV"
           fi
 
       - name: Phase 2 benchmark (fast mode)
@@ -182,9 +138,6 @@ jobs:
               --skip-missing-checkpoints \
               --out /tmp/phase2_benchmark
           fi
-          python experiments/benchmark_phase2.py \
-            --fast \
-            --out /tmp/phase2_benchmark
         timeout-minutes: 200
         continue-on-error: true   # benchmark is informational until fully integrated
 
