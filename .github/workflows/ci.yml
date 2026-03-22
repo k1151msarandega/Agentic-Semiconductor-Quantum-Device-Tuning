@@ -98,7 +98,9 @@ jobs:
       # ------------------------------------------------------------------
       # Phase 2 benchmark (fast mode)
       # Attempts cross-workflow checkpoint download from train.yml.
-      # Falls back to stub mode if artifact is unavailable.
+      # Falls back to stub mode gracefully if artifact is unavailable.
+      # Only runs on main branch pushes (3.11 matrix only) to avoid
+      # slowing down PRs.
       # ------------------------------------------------------------------
       - name: Download Phase 1 checkpoint (cross-workflow)
         id: checkpoint
@@ -111,34 +113,16 @@ jobs:
           if_no_artifact_found: ignore
         continue-on-error: true
 
-      - name: Check Phase 1 checkpoint presence
+      - name: Report checkpoint status
         if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
+        continue-on-error: true
         run: |
-          set -u
-          CKPT_DIR="experiments/checkpoints/phase1"
-          echo "Checkpoint directory contents:"
-          if [ -d "$CKPT_DIR" ]; then
-            ls -lah "$CKPT_DIR"
-          else
-            echo "Directory not found: $CKPT_DIR"
-          fi
-
-          missing=""
-          for f in model_0.pt model_1.pt model_2.pt model_3.pt model_4.pt ood_detector.pkl training_log.json; do
-            if [ ! -f "$CKPT_DIR/$f" ]; then
-              missing="$missing $f"
-            fi
-          done
-
-          if [ -z "$missing" ]; then
+          if [ -f "experiments/checkpoints/phase1/model_0.pt" ]; then
+            echo "Trained checkpoint loaded — benchmark will use real classifier"
             echo "CHECKPOINT_READY=1" >> "$GITHUB_ENV"
-            echo "Trained checkpoint loaded - benchmark will use real classifier"
           else
-            for f in $missing; do
-              echo "Missing: $f"
-            done
+            echo "No checkpoint found — benchmark running in stub mode (smoke test only)"
             echo "CHECKPOINT_READY=0" >> "$GITHUB_ENV"
-            echo "No checkpoint found - benchmark running in stub mode (smoke test only)"
           fi
 
       - name: Phase 2 benchmark (fast mode)

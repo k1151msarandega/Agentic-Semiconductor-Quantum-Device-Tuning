@@ -2,35 +2,23 @@ name: Train Phase 1 Classifier
 
 on:
   workflow_dispatch:
-    inputs:
-      fast:
-        description: "Run reduced quick training (debug/smoke); disable for full training"
-        required: false
-        default: false
-        type: boolean
-      upload_artifact_name:
-        description: "Artifact name to upload (default supports CI checkpoint download)"
-        required: false
-        default: "phase1-checkpoint-latest"
-        type: string
   schedule:
-    - cron: "0 2 * * 0"
-
-concurrency:
-  group: train-phase1-${{ github.ref }}
-  cancel-in-progress: false
+    - cron: '0 2 * * 0'
+  workflow_dispatch:        # manual trigger from Actions UI
+  schedule:
+    - cron: '0 2 * * 0'    # weekly, Sunday 02:00 UTC
 
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
           cache: pip
 
       - name: Install dependencies
@@ -42,14 +30,8 @@ jobs:
           pip install -e . --no-deps
 
       - name: Train Phase 1 ensemble + OOD detector
-        env:
-          RUN_FAST: ${{ github.event_name == 'workflow_dispatch' && inputs.fast || false }}
-        run: |
-          if [ "$RUN_FAST" = "true" ]; then
-            python experiments/train_phase1.py --fast --out experiments/checkpoints/phase1
-          else
-            python experiments/train_phase1.py --out experiments/checkpoints/phase1
-          fi
+        run: python experiments/train_phase1.py --out experiments/checkpoints/phase1
+        # No --fast flag — full training run (~30-60 min)
 
       - name: Verify checkpoint files exist
         run: |
@@ -63,19 +45,25 @@ jobs:
           python - <<'PYEOF'
           import json
           import pathlib
-
           log = json.loads(pathlib.Path('experiments/checkpoints/phase1/training_log.json').read_text())
           results = log.get('results', {})
           config = log.get('config', {})
           print('Val accuracy (CIM):', results.get('val_accuracy_cim', 'n/a'))
           print('Epochs:', config.get('n_epochs', 'n/a'))
           print('Timestamp:', log.get('timestamp', 'n/a'))
+          import json, pathlib
+          log = json.loads(pathlib.Path('experiments/checkpoints/phase1/training_log.json').read_text())
+          results = log.get('results', {})
+          config  = log.get('config', {})
+          print('Val accuracy (CIM):', results.get('val_accuracy_cim', 'n/a'))
+          print('Epochs:',             config.get('n_epochs', 'n/a'))
+          print('Timestamp:',          log.get('timestamp', 'n/a'))
           PYEOF
 
       - name: Upload checkpoint artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifact_name || 'phase1-checkpoint-latest' }}
+          name: phase1-checkpoint-latest
           path: experiments/checkpoints/phase1/
           retention-days: 90
           if-no-files-found: error
