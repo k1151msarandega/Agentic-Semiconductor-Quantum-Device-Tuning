@@ -1,13 +1,11 @@
 name: CI
 
-name: CI
-
 on:
   workflow_dispatch:
   push:
-    branches: [ main, "phase-*" ]
+    branches: [main, "phase-*"]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
@@ -99,11 +97,10 @@ jobs:
         continue-on-error: true   # coverage target is aspirational during active dev
 
       # ------------------------------------------------------------------
-      # Phase 2 benchmark (fast mode)
-      # Attempts cross-workflow checkpoint download from train.yml.
+      # Phase 2 benchmark (full mode)
+      # Downloads trained Phase 1 checkpoint from train.yml artifact.
       # Falls back to stub mode gracefully if artifact is unavailable.
-      # Only runs on main branch pushes (3.11 matrix only) to avoid
-      # slowing down PRs.
+      # Only runs on main branch pushes (3.11 matrix only).
       # ------------------------------------------------------------------
       - name: Download Phase 1 checkpoint (cross-workflow)
         id: checkpoint
@@ -128,16 +125,20 @@ jobs:
             echo "CHECKPOINT_READY=0" >> "$GITHUB_ENV"
           fi
 
-      - name: Phase 2 benchmark (fast mode)
+      - name: Phase 2 benchmark (full mode)
         if: github.ref == 'refs/heads/main' && matrix.python-version == '3.11'
         run: |
           if [ "${CHECKPOINT_READY:-0}" = "1" ]; then
             python experiments/benchmark_phase2.py \
-              --fast \
+              --budget 2048 \
+              --n-trials 50 \
+              --max-steps 100 \
               --out /tmp/phase2_benchmark
           else
             python experiments/benchmark_phase2.py \
-              --fast \
+              --budget 2048 \
+              --n-trials 50 \
+              --max-steps 100 \
               --skip-missing-checkpoints \
               --out /tmp/phase2_benchmark
           fi
