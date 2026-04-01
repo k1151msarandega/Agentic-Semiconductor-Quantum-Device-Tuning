@@ -213,16 +213,15 @@ class MultiResBO:
     # ------------------------------------------------------------------
 
     def _update_gp_prior(self) -> None:
-        """Set GP prior mean to CIM prediction weighted by current belief."""
-        belief = self.belief
+    """Set GP prior mean to CIM prediction weighted by current belief."""
+    belief = self.belief
 
-        def prior_fn(vg1: float, vg2: float) -> float:
-            if not belief.charge_probs:
-                return self.device.current(vg1, vg2)
-            # Weighted sum over belief
-            mu = 0.0
-            for (n1, n2), prob in belief.charge_probs.items():
-                mu += prob * self.device.current(vg1, vg2)
-            return float(mu)
+    def prior_fn(vg1: float, vg2: float) -> float:
+        if not belief.charge_probs:
+            return self.device.current(vg1, vg2)
+        mu = 0.0
+        for (n1, n2), prob in belief.charge_probs.items():
+            mu += prob * self.device.current_for_state(vg1, vg2, n1, n2)  # was current()
+        return float(mu)
 
-        self.gp.set_prior_mean(prior_fn)
+    self.gp.set_prior_mean(prior_fn)
