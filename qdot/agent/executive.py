@@ -103,8 +103,13 @@ class ExecutiveAgent:
 
         return self._mission_summary()
 
-    def _step(self) -> None:
-        """Execute one iteration of the main agent loop."""
+    def _step(self) -> bool:
+        """
+        Execute one iteration of the main agent loop.
+
+        Returns True if the loop should continue, False if it should stop.
+        Used by diagnose_trial.py for step-by-step monitoring.
+        """
         self.control_steps += 1
         stage = self.state.stage
 
@@ -119,7 +124,7 @@ class ExecutiveAgent:
         elif stage == TuningStage.VERIFICATION:
             result = self._run_verification()
         else:
-            return
+            return False
 
         new_stage, rationale, hitl_triggered = self.state_machine.process_result(result)
 
@@ -133,6 +138,8 @@ class ExecutiveAgent:
 
         if hitl_triggered:
             self._handle_hitl(rationale)
+
+        return not self._should_terminate()
 
     # ------------------------------------------------------------------
     # Stage executors
@@ -188,46 +195,48 @@ class ExecutiveAgent:
         if dqc.quality == DQCQuality.LOW:
             return survey_result(peak_found=False, peak_quality=0.0)
 
-        arr = m.array if m.array is not None else []
-        arr = np.asarray(arr)
+        arr = np.asarray(m.array) if m.array is not None else np.array([])
         peak_quality = float((arr.max() - arr.mean()) / (arr.max() + 1e-8))
 
         if m.is_2d:
             self.belief_updater.update_from_2d(m)
 
-            # Move to the peak location identified in this scan
-            if peak_quality > 0.2 and arr.size > 0:
-                idx = np.unravel_index(np.argmax(arr), arr.shape)
-                row, col = idx
+            # Store the peak voltage in state.config so CHARGE_ID scans the
+            # right location. We do NOT physically move here — the slew rate
+            # cap (0.1V L1) would require 5+ survey iterations to reach a peak
+            # at -0.5V, and the state machine advances after the first success.
+            # Storing the location and passing it to CHARGE_ID is the correct
+            # architectural approach: no safety constraint is worked around,
+            # and CHARGE_ID always scans the known feature location.
+            if peak_quality > 0.2 and arr.size > 0 and arr.ndim >= 2:
+                row, col = np.unravel_index(np.argmax(arr), arr.shape)
                 v1_lo, v1_hi = m.v1_range or (-1.0, 1.0)
                 v2_lo, v2_hi = m.v2_range or (-1.0, 1.0)
-                res = arr.shape[0] if arr.ndim > 0 else 1
+                res = arr.shape[0]
                 if res > 1:
                     peak_vg1 = v1_lo + (col / (res - 1)) * (v1_hi - v1_lo)
                     peak_vg2 = v2_lo + (row / (res - 1)) * (v2_hi - v2_lo)
-                    target = VoltagePoint(vg1=peak_vg1, vg2=peak_vg2)
-                    delta = target.delta_to(self.state.current_voltage)
-                    clipped = self.safety_critic.clip(
-                        ActionProposal(delta_v=delta), self.state.current_voltage
-                    )
-                    if self.safety_critic.verify(self.state.current_voltage, clipped).all_passed:
-                        self.translator.execute_voltage_move(
-                            vg1=self.state.current_voltage.vg1 + clipped.safe_delta_v.vg1,
-                            vg2=self.state.current_voltage.vg2 + clipped.safe_delta_v.vg2,
-                        )
-                        self.state.apply_move(clipped.safe_delta_v)
+                    self.state.config["survey_peak_vg1"] = peak_vg1
+                    self.state.config["survey_peak_vg2"] = peak_vg2
 
         return survey_result(peak_found=peak_quality > 0.2, peak_quality=peak_quality)
 
     def _run_charge_id(self) -> StageResult:
-        v1_range = (
-            self.state.current_voltage.vg1 - 0.2,
-            self.state.current_voltage.vg1 + 0.2,
+        # Use the peak location found during survey if available.
+        # This is the core fix: CHARGE_ID scans where we know features are,
+        # not where current_voltage happens to be (which is still near origin
+        # since the slew-limited bootstrap/survey don't move far).
+        centre_vg1 = self.state.config.get(
+            "survey_peak_vg1", self.state.current_voltage.vg1
         )
-        v2_range = (
-            self.state.current_voltage.vg2 - 0.2,
-            self.state.current_voltage.vg2 + 0.2,
+        centre_vg2 = self.state.config.get(
+            "survey_peak_vg2", self.state.current_voltage.vg2
         )
+
+        # ±0.2V window around the known feature location (wider than ±0.1
+        # to account for argmax pixel-quantisation error in the survey scan).
+        v1_range = (centre_vg1 - 0.2, centre_vg1 + 0.2)
+        v2_range = (centre_vg2 - 0.2, centre_vg2 + 0.2)
 
         plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
         plan = self._fit_plan_to_remaining_budget(plan)
@@ -386,80 +395,6 @@ class ExecutiveAgent:
             stable=(confirmations >= 2),
             reproducibility=reproducibility,
             charge_noise=charge_noise,
-        )
-
-    def _estimate_plan_cost(self, plan: MeasurementPlan) -> int:
-        """Estimate measurement points consumed by a plan."""
-        if plan.modality == MeasurementModality.NONE:
-            return 0
-        if plan.modality == MeasurementModality.LINE_SCAN:
-            return int(plan.steps or 128)
-        if plan.resolution is None:
-            return 0
-        return int(plan.resolution * plan.resolution)
-
-    def _fit_plan_to_remaining_budget(self, plan: MeasurementPlan) -> MeasurementPlan:
-        """Clamp or downgrade a plan so it cannot exceed remaining budget."""
-        remaining = self.measurement_budget - self.state.total_measurements
-        if remaining <= 0:
-            return MeasurementPlan(modality=MeasurementModality.NONE, rationale="Budget exhausted")
-
-        cost = self._estimate_plan_cost(plan)
-        if cost <= remaining:
-            return plan
-
-        if plan.modality == MeasurementModality.LINE_SCAN:
-            steps = max(2, min(int(plan.steps or 128), remaining))
-            if steps < 2:
-                return MeasurementPlan(modality=MeasurementModality.NONE, rationale="Insufficient budget for line scan")
-            return MeasurementPlan(
-                modality=MeasurementModality.LINE_SCAN,
-                axis=plan.axis or "vg1",
-                start=plan.start,
-                stop=plan.stop,
-                steps=steps,
-                rationale=f"{plan.rationale} (budget-clamped to {steps} steps)",
-                info_gain_per_cost=plan.info_gain_per_cost,
-            )
-
-        # 2D scan doesn't fit at requested resolution.
-        # Try progressively smaller 2D resolutions before falling to 1D.
-        v1_range = plan.v1_range or (
-            self.state.voltage_bounds["vg1"]["min"],
-            self.state.voltage_bounds["vg1"]["max"],
-        )
-        v2_range = plan.v2_range or (
-            self.state.voltage_bounds["vg2"]["min"],
-            self.state.voltage_bounds["vg2"]["max"],
-        )
-
-        requested_res = int(plan.resolution or math.isqrt(max(cost, 1)))
-        min_res = 8
-        max_fit_res = int(math.isqrt(remaining))
-        res = min(requested_res, max_fit_res)
-
-        if res >= min_res:
-            return MeasurementPlan(
-                modality=plan.modality,
-                v1_range=v1_range,
-                v2_range=v2_range,
-                resolution=res,
-                rationale=(
-                    f"{plan.rationale} (resolution reduced {requested_res}→{res} to fit budget)"
-                ),
-                info_gain_per_cost=plan.info_gain_per_cost,
-            )
-
-        # Even 8×8 doesn't fit — fall back to a line scan
-        steps = max(2, min(128, remaining))
-        return MeasurementPlan(
-            modality=MeasurementModality.LINE_SCAN,
-            axis="vg1",
-            start=v1_range[0],
-            stop=v1_range[1],
-            steps=steps,
-            rationale=f"{plan.rationale} (downgraded to {steps}-pt line scan; budget remaining={remaining})",
-            info_gain_per_cost=plan.info_gain_per_cost,
         )
 
     # ------------------------------------------------------------------
