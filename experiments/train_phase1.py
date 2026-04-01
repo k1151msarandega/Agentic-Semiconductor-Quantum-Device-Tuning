@@ -71,6 +71,16 @@ def main():
     X_all, y_all = dataset.generate()
     print(f"Data generation: {time.time()-t0:.1f}s | shape={X_all.shape}")
 
+    # Apply log preprocessing to match inference pipeline.
+    # EnsembleCNN._prepare() applies log_preprocess() at inference time,
+    # so training data must go through the same transform. Without this,
+    # models train on raw conductance but infer on log-conductance — the
+    # distribution mismatch collapses val accuracy from ~70% to ~33% (random).
+    from qdot.perception.features import log_preprocess
+    X_all = np.stack(
+        [log_preprocess(x[0])[np.newaxis] for x in X_all], axis=0
+    ).astype(np.float32)
+
     X_train, X_val, y_train, y_val = CIMDataset.split(
         X_all, y_all, val_frac=0.15, seed=args.seed
     )
