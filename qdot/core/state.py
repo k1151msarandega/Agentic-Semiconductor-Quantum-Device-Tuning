@@ -54,25 +54,27 @@ class BeliefState:
     uncertainty_map: Optional[Any] = None  # np.ndarray once fitted
 
     # CIM physics parameters for this device (updated by DisorderLearner)
+    # BeliefState.device_params defaults — match cim.py validated parameters
     device_params: Dict[str, float] = field(default_factory=lambda: {
-        "E_c1": 2.3,
-        "E_c2": 2.5,
-        "t_c": 0.15,
-        "T": 0.1,
-        "lever_arm": 0.5,
-        "noise_level": 0.02,
+        "E_c1": 0.50,    # was 2.3 — old value placed peak outside scan window
+        "E_c2": 0.55,    # was 2.5
+        "t_c": 0.05,     # was 0.15
+        "T": 0.015,      # was 0.1
+        "lever_arm": 1.0, # was 0.5 — critical: need lever_arm >= E_c
+        "noise_level": 0.01, # was 0.02
     })
 
     # Disorder posterior (None until DisorderLearner has run)
     disorder_estimate: Optional[Dict[str, Any]] = None
 
+    # BeliefState.entropy() — change log2 to log
     def entropy(self) -> float:
-        """Shannon entropy over charge state distribution."""
+        """Shannon entropy over charge state distribution (nats, consistent with sensing.py)."""
         if not self.charge_probs:
             return float("inf")
         probs = np.array(list(self.charge_probs.values()), dtype=float)
         probs = probs[probs > 0]
-        return float(-np.sum(probs * np.log2(probs)))
+        return float(-np.sum(probs * np.log(probs)))  # was np.log2
 
     def most_likely_state(self) -> Optional[tuple]:
         if not self.charge_probs:
