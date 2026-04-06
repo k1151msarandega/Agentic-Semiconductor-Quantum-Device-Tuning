@@ -232,37 +232,48 @@ class ExecutiveAgent:
         centre_vg2 = self.state.config.get(
             "survey_peak_vg2", self.state.current_voltage.vg2
         )
-
+    
         # ±0.2V window around the known feature location (wider than ±0.1
         # to account for argmax pixel-quantisation error in the survey scan).
         v1_range = (centre_vg1 - 0.2, centre_vg1 + 0.2)
         v2_range = (centre_vg2 - 0.2, centre_vg2 + 0.2)
-
-        plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
+    
+        # CHARGE_ID always needs a 2D scan — the InspectionAgent requires is_2d=True.
+        # The sensing policy systematically selects LINE_SCAN here because its
+        # IG/cost ratio beats all 2D options' theoretical maxima (LINE_SCAN cost is
+        # 8x lower). Bypassing it for this stage is architecturally correct:
+        # CHARGE_ID is a classification task, not an exploration task.
+        plan = MeasurementPlan(
+            modality=MeasurementModality.COARSE_2D,
+            v1_range=v1_range,
+            v2_range=v2_range,
+            resolution=32,
+            rationale="CHARGE_ID: 2D scan required for InspectionAgent classification",
+        )
         plan = self._fit_plan_to_remaining_budget(plan)
-
+    
         tr = self.translator.execute(plan)
-
+    
         if tr.measurement is None:
             return charge_id_result("unknown", 0.0)
-
+    
         m = tr.measurement
         self.state.add_measurement(m)
         dqc = self.dqc.assess(m)
         self.state.add_dqc_result(dqc)
-
+    
         if dqc.quality == DQCQuality.LOW:
             return charge_id_result("unknown", 0.0)
-
+    
         if not m.is_2d or self.inspection_agent is None:
             return charge_id_result("unknown", 0.3)
-
+    
         classification, ood_result = self.inspection_agent.inspect(m, dqc)
         self.state.add_classification(classification)
         self.state.add_ood_result(ood_result)
-
+    
         self.belief_updater.update_from_2d(m, classification)
-
+    
         return charge_id_result(
             label=classification.label.value,
             confidence=classification.confidence,
@@ -357,45 +368,51 @@ class ExecutiveAgent:
         return navigation_result(target_reached, belief_confidence)
 
     def _run_verification(self) -> StageResult:
-        confirmations = 0
-        n_checks = 3
+    confirmations = 0
+    n_checks = 3
 
-        for _ in range(n_checks):
-            plan = self.sensing_policy.select(
-                self.state.belief,
-                v1_range=(self.state.current_voltage.vg1 - 0.05, self.state.current_voltage.vg1 + 0.05),
-                v2_range=(self.state.current_voltage.vg2 - 0.05, self.state.current_voltage.vg2 + 0.05),
-            )
-            plan = self._fit_plan_to_remaining_budget(plan)
-
-            tr = self.translator.execute(plan)
-            if tr.measurement is None:
-                continue
-
-            m = tr.measurement
-            self.state.add_measurement(m)
-            dqc = self.dqc.assess(m)
-            self.state.add_dqc_result(dqc)
-
-            if dqc.quality == DQCQuality.LOW:
-                continue
-
-            if m.is_2d and self.inspection_agent:
-                classification, ood_result = self.inspection_agent.inspect(m, dqc)
-                self.state.add_classification(classification)
-                self.state.add_ood_result(ood_result)
-                self.belief_updater.update_from_2d(m, classification)
-
-                if classification.label == ChargeLabel.DOUBLE_DOT:
-                    confirmations += 1
-
-        reproducibility = confirmations / n_checks
-        charge_noise = 1.0 - reproducibility
-        return verification_result(
-            stable=(confirmations >= 2),
-            reproducibility=reproducibility,
-            charge_noise=charge_noise,
+    for _ in range(n_checks):
+        # VERIFICATION always needs 2D scans — the InspectionAgent requires is_2d=True.
+        # Like CHARGE_ID, this is a classification task (confirming DOUBLE_DOT state).
+        # The sensing policy would select LINE_SCAN for the same reason (8x cost advantage).
+        # Bypassing it for this stage is architecturally correct.
+        plan = MeasurementPlan(
+            modality=MeasurementModality.COARSE_2D,
+            v1_range=(self.state.current_voltage.vg1 - 0.05, self.state.current_voltage.vg1 + 0.05),
+            v2_range=(self.state.current_voltage.vg2 - 0.05, self.state.current_voltage.vg2 + 0.05),
+            resolution=16,
+            rationale="VERIFICATION: 2D scan required for InspectionAgent classification",
         )
+        plan = self._fit_plan_to_remaining_budget(plan)
+
+        tr = self.translator.execute(plan)
+        if tr.measurement is None:
+            continue
+
+        m = tr.measurement
+        self.state.add_measurement(m)
+        dqc = self.dqc.assess(m)
+        self.state.add_dqc_result(dqc)
+
+        if dqc.quality == DQCQuality.LOW:
+            continue
+
+        if m.is_2d and self.inspection_agent:
+            classification, ood_result = self.inspection_agent.inspect(m, dqc)
+            self.state.add_classification(classification)
+            self.state.add_ood_result(ood_result)
+            self.belief_updater.update_from_2d(m, classification)
+
+            if classification.label == ChargeLabel.DOUBLE_DOT:
+                confirmations += 1
+
+    reproducibility = confirmations / n_checks
+    charge_noise = 1.0 - reproducibility
+    return verification_result(
+        stable=(confirmations >= 2),
+        reproducibility=reproducibility,
+        charge_noise=charge_noise,
+    )
 
     # ------------------------------------------------------------------
     # Budget guard
