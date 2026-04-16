@@ -243,6 +243,11 @@ class ExecutiveAgent:
         # ±1.0V is a well-covered subset). When the survey peak IS an interior
         # maximum (transition inside the window), keep the ±0.2V local scan
         # for high-resolution feature inspection.
+<<<<<<< HEAD
+=======
+        _BOUNDARY_TOL = 0.05  # 5% of the ±1V half-range
+
+>>>>>>> 5b3eb4fc174c7708d9a10c1afb9b06564a7bdbf0
         vg1_min = self.state.voltage_bounds["vg1"]["min"]
         vg1_max = self.state.voltage_bounds["vg1"]["max"]
         vg2_min = self.state.voltage_bounds["vg2"]["min"]
@@ -255,6 +260,7 @@ class ExecutiveAgent:
             "survey_peak_vg2", self.state.current_voltage.vg2
         )
 
+<<<<<<< HEAD
         # Use the local ±0.2V sub-scan only when the survey DQC confirmed a
         # genuine charge feature (high SNR). When the transition is outside the
         # scan window, the survey argmax is a noise spike — its location is
@@ -279,6 +285,26 @@ class ExecutiveAgent:
             # Noise argmax or no survey SNR available: full-range scan.
             v1_range = (vg1_min, vg1_max)
             v2_range = (vg2_min, vg2_max)
+=======
+        at_vg1_boundary = (
+            centre_vg1 <= vg1_min + _BOUNDARY_TOL
+            or centre_vg1 >= vg1_max - _BOUNDARY_TOL
+        )
+        at_vg2_boundary = (
+            centre_vg2 <= vg2_min + _BOUNDARY_TOL
+            or centre_vg2 >= vg2_max - _BOUNDARY_TOL
+        )
+
+        if at_vg1_boundary or at_vg2_boundary:
+            # Transition is outside the scan window.  Give the CNN the full
+            # stability diagram — the same view it was trained on.
+            v1_range = (vg1_min, vg1_max)
+            v2_range = (vg2_min, vg2_max)
+        else:
+            # Genuine interior peak — keep the high-resolution local scan.
+            v1_range = (centre_vg1 - 0.2, centre_vg1 + 0.2)
+            v2_range = (centre_vg2 - 0.2, centre_vg2 + 0.2)
+>>>>>>> 5b3eb4fc174c7708d9a10c1afb9b06564a7bdbf0
 
         # CHARGE_ID always needs a 2D scan — the InspectionAgent requires is_2d=True.
         # The sensing policy systematically selects LINE_SCAN here because its
