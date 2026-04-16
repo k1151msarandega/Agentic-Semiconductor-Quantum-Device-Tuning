@@ -83,9 +83,15 @@ class TestEnumStability:
         assert ChargeLabel.MISC.value == "misc"
 
     def test_tuning_stage_ordering(self):
-        # Stage order must be stable for state machine logic
+        # Stage order must be stable for state machine logic.
+        # Values updated in Phase 2.1 when HYPERSURFACE_SEARCH = 2 was inserted.
         assert TuningStage.BOOTSTRAPPING.value == 0
-        assert TuningStage.COMPLETE.value == 5
+        assert TuningStage.COARSE_SURVEY.value == 1
+        assert TuningStage.HYPERSURFACE_SEARCH.value == 2
+        assert TuningStage.CHARGE_ID.value == 3
+        assert TuningStage.NAVIGATION.value == 4
+        assert TuningStage.VERIFICATION.value == 5
+        assert TuningStage.COMPLETE.value == 6
         assert TuningStage.FAILED.value == -1
 
     def test_hitl_outcome_values(self):
