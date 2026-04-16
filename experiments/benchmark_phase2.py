@@ -189,8 +189,13 @@ def run_trial(
         "trial_idx": trial_idx,
     }
 
-    # Create device adapter with varying CIM parameters (test generalization)
-    E_c_base = 3.0 + np.random.uniform(-0.5, 0.5)
+    # CIM parameters constrained so the charge transition is within ±3 V.
+    # Transition voltage: V_t = -E_c / lever_arm.
+    # With lever_arm ~ 0.65 and E_c ~ 1.5 meV:
+    #   V_t ≈ -2.3 V  (range: -1.8 to -2.8 V across the ± perturbations)
+    # This matches GaAs-class device physics and is reachable within the
+    # ±3 V voltage bounds set in ExperimentState (state.py).
+    E_c_base = 1.5 + np.random.uniform(-0.3, 0.3)   # meV; was 3.0 (unreachable)
     t_c_base = 0.3 + np.random.uniform(-0.1, 0.1)
     adapter = CIMSimulatorAdapter(
         device_id=device_id,
@@ -199,7 +204,7 @@ def run_trial(
             "E_c2": E_c_base + 0.2,
             "t_c": t_c_base,
             "T": 0.08,
-            "lever_arm": 0.55,
+            "lever_arm": 0.65,   # was 0.55; higher lever → transition closer to 0V
             "noise_level": 0.015,
         },
         seed=trial_idx + 1000,
