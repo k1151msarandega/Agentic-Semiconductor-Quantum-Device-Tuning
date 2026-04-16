@@ -35,6 +35,12 @@ from qdot.planning.sensing import ActiveSensingPolicy, MODALITY_COST
 from qdot.planning.bayesian_opt import GaussianProcess, MultiResBO
 from qdot.planning.state_machine import (
     StateMachine, StageResult,
+    bootstrap_result, survey_result, hypersurface_result,
+    charge_id_result, navigation_result, verification_result,
+    DEFAULT_STAGE_CONFIGS,
+)
+from qdot.planning.state_machine import (
+    StateMachine, StageResult,
     bootstrap_result, survey_result,
     charge_id_result, navigation_result, verification_result,
     DEFAULT_STAGE_CONFIGS,
@@ -450,16 +456,17 @@ class TestStateMachine:
                 assert isinstance(evt, BacktrackEvent)
 
     def test_complete_stage_sequence(self):
-        """Full happy path: BOOTSTRAP → SURVEY → CHARGE_ID → NAVIGATION → VERIFICATION."""
+        """Full happy path: BOOTSTRAP → SURVEY → HYPERSURFACE_SEARCH → CHARGE_ID → NAVIGATION → VERIFICATION → COMPLETE."""
         state = make_state()
         sm = StateMachine(state)
 
         stages_results = [
-            bootstrap_result(True, True),                          # BOOTSTRAPPING → COARSE_SURVEY
-            survey_result(True, 0.8),                              # COARSE_SURVEY → CHARGE_ID
-            charge_id_result("double-dot", 0.85),                  # CHARGE_ID → NAVIGATION
-            navigation_result(target_reached=True, belief_confidence=0.85),  # NAVIGATION → VERIFICATION
-            verification_result(stable=True, reproducibility=0.95, charge_noise=0.02),  # VERIFICATION → COMPLETE
+            bootstrap_result(True, True),                                                        # BOOTSTRAPPING → COARSE_SURVEY
+            survey_result(True, 0.8),                                                            # COARSE_SURVEY → HYPERSURFACE_SEARCH
+            hypersurface_result(boundary_found=True, proximity_confidence=0.75),                 # HYPERSURFACE_SEARCH → CHARGE_ID
+            charge_id_result("double-dot", 0.85),                                               # CHARGE_ID → NAVIGATION
+            navigation_result(target_reached=True, belief_confidence=0.85),                     # NAVIGATION → VERIFICATION
+            verification_result(stable=True, reproducibility=0.95, charge_noise=0.02),          # VERIFICATION → COMPLETE
         ]
 
         for result in stages_results:
