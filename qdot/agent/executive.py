@@ -31,6 +31,12 @@ from qdot.core.hitl import HITLManager
 from qdot.hardware.adapter import DeviceAdapter
 from qdot.hardware.safety import SafetyCritic
 
+from qdot.planning.state_machine import (
+    StateMachine, StageResult,
+    bootstrap_result, survey_result, hypersurface_result,
+    charge_id_result, navigation_result, verification_result,
+)
+
 from qdot.perception.dqc import DQCGatekeeper
 from qdot.perception.inspector import InspectionAgent
 
@@ -90,19 +96,6 @@ class ExecutiveAgent:
     # Main loop
     # ------------------------------------------------------------------
 
-    def run(self) -> dict:
-        self._log_decision(
-            intent="mission_start",
-            obs={},
-            action={"step_budget": self.max_steps, "meas_budget": self.measurement_budget},
-            rationale="Mission start — first voltage always triggers HITL (risk=1.0)",
-        )
-
-        while not self._should_terminate():
-            self._step()
-
-        return self._mission_summary()
-
     def _step(self) -> bool:
         """
         Execute one iteration of the main agent loop.
@@ -117,6 +110,8 @@ class ExecutiveAgent:
             result = self._run_bootstrap()
         elif stage == TuningStage.COARSE_SURVEY:
             result = self._run_survey()
+        elif stage == TuningStage.HYPERSURFACE_SEARCH:
+            result = self._run_hypersurface_search()
         elif stage == TuningStage.CHARGE_ID:
             result = self._run_charge_id()
         elif stage == TuningStage.NAVIGATION:
@@ -226,6 +221,77 @@ class ExecutiveAgent:
 
         return survey_result(peak_found=peak_quality > 0.2, peak_quality=peak_quality)
 
+    def _run_hypersurface_search(self) -> StageResult:
+        """
+        Navigate to the charge boundary found by COARSE_SURVEY.
+
+        Does a local 2D scan centred on the survey peak and checks whether
+        a genuine charge feature is visible (DQC SNR ≥ 5 dB).  If the
+        boundary is confirmed, the refined peak location is written back to
+        state.config so CHARGE_ID always scans the right neighbourhood.
+
+        The SNR threshold of 5 dB discriminates:
+          - Real Coulomb peak inside the window  → SNR >> 5 dB
+          - Noise-argmax / featureless gradient  → SNR << 5 dB
+        """
+        centre_vg1 = self.state.config.get(
+            "survey_peak_vg1", self.state.current_voltage.vg1
+        )
+        centre_vg2 = self.state.config.get(
+            "survey_peak_vg2", self.state.current_voltage.vg2
+        )
+
+        # ±0.5 V window around the survey peak — wide enough to capture
+        # the first Coulomb diamond while staying well within the budget.
+        half = 0.5
+        v1_lo = max(self.state.voltage_bounds["vg1"]["min"], centre_vg1 - half)
+        v1_hi = min(self.state.voltage_bounds["vg1"]["max"], centre_vg1 + half)
+        v2_lo = max(self.state.voltage_bounds["vg2"]["min"], centre_vg2 - half)
+        v2_hi = min(self.state.voltage_bounds["vg2"]["max"], centre_vg2 + half)
+
+        plan = MeasurementPlan(
+            modality=MeasurementModality.COARSE_2D,
+            v1_range=(v1_lo, v1_hi),
+            v2_range=(v2_lo, v2_hi),
+            resolution=32,
+            rationale=(
+                "HYPERSURFACE_SEARCH: local scan around survey peak to confirm "
+                "charge boundary is visible before classification"
+            ),
+        )
+        plan = self._fit_plan_to_remaining_budget(plan)
+        tr = self.translator.execute(plan)
+
+        if tr.measurement is None:
+            return hypersurface_result(boundary_found=False, proximity_confidence=0.0)
+
+        m = tr.measurement
+        self.state.add_measurement(m)
+        dqc = self.dqc.assess(m)
+        self.state.add_dqc_result(dqc)
+
+        boundary_found = dqc.snr_db >= 5.0
+        # Normalise SNR to [0, 1]: 20 dB is a strong, unambiguous feature.
+        proximity_confidence = float(np.clip(dqc.snr_db / 20.0, 0.0, 1.0))
+
+        if boundary_found and m.array is not None:
+            arr = np.asarray(m.array)
+            if arr.ndim >= 2 and arr.shape[0] > 1:
+                row, col = np.unravel_index(np.argmax(arr), arr.shape)
+                res = arr.shape[0]
+                refined_vg1 = v1_lo + (col / (res - 1)) * (v1_hi - v1_lo)
+                refined_vg2 = v2_lo + (row / (res - 1)) * (v2_hi - v2_lo)
+                # Overwrite survey peak with the refined boundary position.
+                # CHARGE_ID will read these keys for its local scan.
+                self.state.config["survey_peak_vg1"] = refined_vg1
+                self.state.config["survey_peak_vg2"] = refined_vg2
+                self.state.config["survey_peak_snr_db"] = dqc.snr_db
+
+        return hypersurface_result(
+            boundary_found=boundary_found,
+            proximity_confidence=proximity_confidence,
+        )
+    
     def _run_charge_id(self) -> StageResult:
         # Determine the CHARGE_ID scan range.
         #
