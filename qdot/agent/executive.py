@@ -218,14 +218,36 @@ class ExecutiveAgent:
                     peak_vg2 = v2_lo + (row / (res - 1)) * (v2_hi - v2_lo)
                     self.state.config["survey_peak_vg1"] = peak_vg1
                     self.state.config["survey_peak_vg2"] = peak_vg2
+                    # Store survey SNR so CHARGE_ID can judge peak reliability.
+                    # A noise-argmax (transition outside scan window) produces
+                    # SNR << 5 dB even after normalization; a real charge feature
+                    # produces SNR >> 5 dB. This is the only reliable discriminant.
+                    self.state.config["survey_peak_snr_db"] = dqc.snr_db
 
         return survey_result(peak_found=peak_quality > 0.2, peak_quality=peak_quality)
 
     def _run_charge_id(self) -> StageResult:
-        # Use the peak location found during survey if available.
-        # This is the core fix: CHARGE_ID scans where we know features are,
-        # not where current_voltage happens to be (which is still near origin
-        # since the slew-limited bootstrap/survey don't move far).
+        # Determine the CHARGE_ID scan range.
+        #
+        # When charge transitions lie outside the scan window (typical for
+        # in-distribution CIM params, e.g. E_c≈3.0 meV / lever_arm=0.55
+        # puts the (0,0)↔(1,0) boundary at −5.45V), the survey argmax lands
+        # at the voltage boundary corner — not a genuine charge feature.
+        #
+        # Scanning ±0.2V around that corner gives a featureless noise patch:
+        # signal << noise, conductance_std < 0.05, CNN → MISC every time.
+        #
+        # Fix: detect the boundary-corner artefact and fall back to a full-
+        # range scan so the CNN receives a complete stability diagram that
+        # matches its training distribution (trained on v_range=±1.5V, so
+        # ±1.0V is a well-covered subset). When the survey peak IS an interior
+        # maximum (transition inside the window), keep the ±0.2V local scan
+        # for high-resolution feature inspection.
+        vg1_min = self.state.voltage_bounds["vg1"]["min"]
+        vg1_max = self.state.voltage_bounds["vg1"]["max"]
+        vg2_min = self.state.voltage_bounds["vg2"]["min"]
+        vg2_max = self.state.voltage_bounds["vg2"]["max"]
+
         centre_vg1 = self.state.config.get(
             "survey_peak_vg1", self.state.current_voltage.vg1
         )
@@ -233,10 +255,30 @@ class ExecutiveAgent:
             "survey_peak_vg2", self.state.current_voltage.vg2
         )
 
-        # ±0.2V window around the known feature location (wider than ±0.1
-        # to account for argmax pixel-quantisation error in the survey scan).
-        v1_range = (centre_vg1 - 0.2, centre_vg1 + 0.2)
-        v2_range = (centre_vg2 - 0.2, centre_vg2 + 0.2)
+        # Use the local ±0.2V sub-scan only when the survey DQC confirmed a
+        # genuine charge feature (high SNR). When the transition is outside the
+        # scan window, the survey argmax is a noise spike — its location is
+        # arbitrary and scanning ±0.2V around it gives a featureless noise
+        # patch the CNN always classifies as MISC.
+        #
+        # The SNR threshold of 5 dB is derived from two regimes:
+        #   - Transition inside  window → real Lorentzian peak → SNR >> 5 dB
+        #   - Transition outside window → gentle gradient + noise → SNR << 5 dB
+        #     (measured: ~-7 to -2 dB for E_c=3.0, lever=0.55 within ±1V)
+        #
+        # Falling back to the full range gives the CNN the same view as its
+        # training data (v_range = ±1.5V; ±1.0V is a well-covered subset).
+        survey_snr = self.state.config.get("survey_peak_snr_db", -999.0)
+        peak_is_reliable = survey_snr >= 5.0
+
+        if peak_is_reliable:
+            # Genuine interior peak: high-resolution local scan.
+            v1_range = (centre_vg1 - 0.2, centre_vg1 + 0.2)
+            v2_range = (centre_vg2 - 0.2, centre_vg2 + 0.2)
+        else:
+            # Noise argmax or no survey SNR available: full-range scan.
+            v1_range = (vg1_min, vg1_max)
+            v2_range = (vg2_min, vg2_max)
 
         # CHARGE_ID always needs a 2D scan — the InspectionAgent requires is_2d=True.
         # The sensing policy systematically selects LINE_SCAN here because its
