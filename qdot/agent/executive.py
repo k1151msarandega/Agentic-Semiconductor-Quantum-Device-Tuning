@@ -31,12 +31,6 @@ from qdot.core.hitl import HITLManager
 from qdot.hardware.adapter import DeviceAdapter
 from qdot.hardware.safety import SafetyCritic
 
-from qdot.planning.state_machine import (
-    StateMachine, StageResult,
-    bootstrap_result, survey_result, hypersurface_result,
-    charge_id_result, navigation_result, verification_result,
-)
-
 from qdot.perception.dqc import DQCGatekeeper
 from qdot.perception.inspector import InspectionAgent
 
@@ -45,7 +39,7 @@ from qdot.planning.sensing import ActiveSensingPolicy
 from qdot.planning.bayesian_opt import MultiResBO
 from qdot.planning.state_machine import (
     StateMachine, StageResult,
-    bootstrap_result, survey_result,
+    bootstrap_result, survey_result, hypersurface_result,
     charge_id_result, navigation_result, verification_result,
 )
 
@@ -95,6 +89,19 @@ class ExecutiveAgent:
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
+
+    def run(self) -> dict:
+        self._log_decision(
+            intent="mission_start",
+            obs={},
+            action={"step_budget": self.max_steps, "meas_budget": self.measurement_budget},
+            rationale="Mission start — first voltage always triggers HITL (risk=1.0)",
+        )
+
+        while not self._should_terminate():
+            self._step()
+
+        return self._mission_summary()
 
     def _step(self) -> bool:
         """
@@ -196,13 +203,6 @@ class ExecutiveAgent:
         if m.is_2d:
             self.belief_updater.update_from_2d(m)
 
-            # Store the peak voltage in state.config so CHARGE_ID scans the
-            # right location. We do NOT physically move here — the slew rate
-            # cap (0.1V L1) would require 5+ survey iterations to reach a peak
-            # at -0.5V, and the state machine advances after the first success.
-            # Storing the location and passing it to CHARGE_ID is the correct
-            # architectural approach: no safety constraint is worked around,
-            # and CHARGE_ID always scans the known feature location.
             if peak_quality > 0.2 and arr.size > 0 and arr.ndim >= 2:
                 row, col = np.unravel_index(np.argmax(arr), arr.shape)
                 v1_lo, v1_hi = m.v1_range or (-1.0, 1.0)
@@ -213,10 +213,6 @@ class ExecutiveAgent:
                     peak_vg2 = v2_lo + (row / (res - 1)) * (v2_hi - v2_lo)
                     self.state.config["survey_peak_vg1"] = peak_vg1
                     self.state.config["survey_peak_vg2"] = peak_vg2
-                    # Store survey SNR so CHARGE_ID can judge peak reliability.
-                    # A noise-argmax (transition outside scan window) produces
-                    # SNR << 5 dB even after normalization; a real charge feature
-                    # produces SNR >> 5 dB. This is the only reliable discriminant.
                     self.state.config["survey_peak_snr_db"] = dqc.snr_db
 
         return survey_result(peak_found=peak_quality > 0.2, peak_quality=peak_quality)
@@ -226,13 +222,13 @@ class ExecutiveAgent:
         Navigate to the charge boundary found by COARSE_SURVEY.
 
         Does a local 2D scan centred on the survey peak and checks whether
-        a genuine charge feature is visible (DQC SNR ≥ 5 dB).  If the
+        a genuine charge feature is visible (DQC SNR >= 5 dB).  If the
         boundary is confirmed, the refined peak location is written back to
         state.config so CHARGE_ID always scans the right neighbourhood.
 
         The SNR threshold of 5 dB discriminates:
-          - Real Coulomb peak inside the window  → SNR >> 5 dB
-          - Noise-argmax / featureless gradient  → SNR << 5 dB
+          - Real Coulomb peak inside the window  -> SNR >> 5 dB
+          - Noise-argmax / featureless gradient  -> SNR << 5 dB
         """
         centre_vg1 = self.state.config.get(
             "survey_peak_vg1", self.state.current_voltage.vg1
@@ -241,8 +237,6 @@ class ExecutiveAgent:
             "survey_peak_vg2", self.state.current_voltage.vg2
         )
 
-        # ±0.5 V window around the survey peak — wide enough to capture
-        # the first Coulomb diamond while staying well within the budget.
         half = 0.5
         v1_lo = max(self.state.voltage_bounds["vg1"]["min"], centre_vg1 - half)
         v1_hi = min(self.state.voltage_bounds["vg1"]["max"], centre_vg1 + half)
@@ -271,7 +265,6 @@ class ExecutiveAgent:
         self.state.add_dqc_result(dqc)
 
         boundary_found = dqc.snr_db >= 5.0
-        # Normalise SNR to [0, 1]: 20 dB is a strong, unambiguous feature.
         proximity_confidence = float(np.clip(dqc.snr_db / 20.0, 0.0, 1.0))
 
         if boundary_found and m.array is not None:
@@ -281,8 +274,6 @@ class ExecutiveAgent:
                 res = arr.shape[0]
                 refined_vg1 = v1_lo + (col / (res - 1)) * (v1_hi - v1_lo)
                 refined_vg2 = v2_lo + (row / (res - 1)) * (v2_hi - v2_lo)
-                # Overwrite survey peak with the refined boundary position.
-                # CHARGE_ID will read these keys for its local scan.
                 self.state.config["survey_peak_vg1"] = refined_vg1
                 self.state.config["survey_peak_vg2"] = refined_vg2
                 self.state.config["survey_peak_snr_db"] = dqc.snr_db
@@ -291,29 +282,11 @@ class ExecutiveAgent:
             boundary_found=boundary_found,
             proximity_confidence=proximity_confidence,
         )
-    
-    def _run_charge_id(self) -> StageResult:
-        # Determine the CHARGE_ID scan range.
-        #
-        # When charge transitions lie outside the scan window (typical for
-        # in-distribution CIM params, e.g. E_c≈3.0 meV / lever_arm=0.55
-        # puts the (0,0)↔(1,0) boundary at −5.45V), the survey argmax lands
-        # at the voltage boundary corner — not a genuine charge feature.
-        #
-        # Scanning ±0.2V around that corner gives a featureless noise patch:
-        # signal << noise, conductance_std < 0.05, CNN → MISC every time.
-        #
-        # Fix: detect the boundary-corner artefact and fall back to a full-
-        # range scan so the CNN receives a complete stability diagram that
-        # matches its training distribution (trained on v_range=±1.5V, so
-        # ±1.0V is a well-covered subset). When the survey peak IS an interior
-        # maximum (transition inside the window), keep the ±0.2V local scan
-        # for high-resolution feature inspection.
-<<<<<<< HEAD
-=======
-        _BOUNDARY_TOL = 0.05  # 5% of the ±1V half-range
 
->>>>>>> 5b3eb4fc174c7708d9a10c1afb9b06564a7bdbf0
+    def _run_charge_id(self) -> StageResult:
+        # Use the local +-0.2V sub-scan only when HYPERSURFACE_SEARCH confirmed a
+        # genuine charge feature (SNR >= 5 dB). Otherwise fall back to a full-range
+        # scan so the CNN receives a stability diagram in its training distribution.
         vg1_min = self.state.voltage_bounds["vg1"]["min"]
         vg1_max = self.state.voltage_bounds["vg1"]["max"]
         vg2_min = self.state.voltage_bounds["vg2"]["min"]
@@ -326,57 +299,16 @@ class ExecutiveAgent:
             "survey_peak_vg2", self.state.current_voltage.vg2
         )
 
-<<<<<<< HEAD
-        # Use the local ±0.2V sub-scan only when the survey DQC confirmed a
-        # genuine charge feature (high SNR). When the transition is outside the
-        # scan window, the survey argmax is a noise spike — its location is
-        # arbitrary and scanning ±0.2V around it gives a featureless noise
-        # patch the CNN always classifies as MISC.
-        #
-        # The SNR threshold of 5 dB is derived from two regimes:
-        #   - Transition inside  window → real Lorentzian peak → SNR >> 5 dB
-        #   - Transition outside window → gentle gradient + noise → SNR << 5 dB
-        #     (measured: ~-7 to -2 dB for E_c=3.0, lever=0.55 within ±1V)
-        #
-        # Falling back to the full range gives the CNN the same view as its
-        # training data (v_range = ±1.5V; ±1.0V is a well-covered subset).
         survey_snr = self.state.config.get("survey_peak_snr_db", -999.0)
         peak_is_reliable = survey_snr >= 5.0
 
         if peak_is_reliable:
-            # Genuine interior peak: high-resolution local scan.
             v1_range = (centre_vg1 - 0.2, centre_vg1 + 0.2)
             v2_range = (centre_vg2 - 0.2, centre_vg2 + 0.2)
         else:
-            # Noise argmax or no survey SNR available: full-range scan.
             v1_range = (vg1_min, vg1_max)
             v2_range = (vg2_min, vg2_max)
-=======
-        at_vg1_boundary = (
-            centre_vg1 <= vg1_min + _BOUNDARY_TOL
-            or centre_vg1 >= vg1_max - _BOUNDARY_TOL
-        )
-        at_vg2_boundary = (
-            centre_vg2 <= vg2_min + _BOUNDARY_TOL
-            or centre_vg2 >= vg2_max - _BOUNDARY_TOL
-        )
 
-        if at_vg1_boundary or at_vg2_boundary:
-            # Transition is outside the scan window.  Give the CNN the full
-            # stability diagram — the same view it was trained on.
-            v1_range = (vg1_min, vg1_max)
-            v2_range = (vg2_min, vg2_max)
-        else:
-            # Genuine interior peak — keep the high-resolution local scan.
-            v1_range = (centre_vg1 - 0.2, centre_vg1 + 0.2)
-            v2_range = (centre_vg2 - 0.2, centre_vg2 + 0.2)
->>>>>>> 5b3eb4fc174c7708d9a10c1afb9b06564a7bdbf0
-
-        # CHARGE_ID always needs a 2D scan — the InspectionAgent requires is_2d=True.
-        # The sensing policy systematically selects LINE_SCAN here because its
-        # IG/cost ratio beats all 2D options' theoretical maxima (LINE_SCAN cost is
-        # 8x lower). Bypassing it for this stage is architecturally correct:
-        # CHARGE_ID is a classification task, not an exploration task.
         plan = MeasurementPlan(
             modality=MeasurementModality.COARSE_2D,
             v1_range=v1_range,
@@ -450,7 +382,7 @@ class ExecutiveAgent:
                 run_id=self.state.run_id,
                 step=self.state.step,
                 stage=self.state.stage,
-                trigger_reason=f"Risk score={risk:.2f} ≥ threshold=0.70",
+                trigger_reason=f"Risk score={risk:.2f} >= threshold=0.70",
                 risk_score=risk,
                 proposal=proposal,
                 safety_verdict=safety_verdict,
@@ -506,12 +438,6 @@ class ExecutiveAgent:
         n_checks = 3
 
         for _ in range(n_checks):
-            # VERIFICATION always needs 2D scans — the InspectionAgent requires is_2d=True.
-            # Like CHARGE_ID, this is a classification task (confirming DOUBLE_DOT state).
-            # The sensing policy would select LINE_SCAN for the same reason (8x cost advantage).
-            # Bypassing it for this stage is architecturally correct.
-
-            # Clip the scan window to stay within voltage bounds.
             v1_lo = max(
                 self.state.voltage_bounds["vg1"]["min"],
                 self.state.current_voltage.vg1 - 0.05
@@ -572,7 +498,6 @@ class ExecutiveAgent:
     # ------------------------------------------------------------------
 
     def _estimate_plan_cost(self, plan: MeasurementPlan) -> int:
-        """Estimate measurement points consumed by a plan."""
         if plan.modality == MeasurementModality.NONE:
             return 0
         if plan.modality == MeasurementModality.LINE_SCAN:
@@ -582,14 +507,6 @@ class ExecutiveAgent:
         return int(plan.resolution * plan.resolution)
 
     def _fit_plan_to_remaining_budget(self, plan: MeasurementPlan) -> MeasurementPlan:
-        """
-        Clamp or downgrade a plan so it cannot exceed remaining budget.
-
-        - Line scan: clamp steps to remaining points (min 2).
-        - 2D scan:   reduce resolution to largest res where res² fits;
-                     fall back to line scan only if even 8×8 doesn't fit.
-        - Budget exhausted: return NONE.
-        """
         remaining = self.measurement_budget - self.state.total_measurements
         if remaining <= 0:
             return MeasurementPlan(
@@ -613,7 +530,6 @@ class ExecutiveAgent:
                 info_gain_per_cost=plan.info_gain_per_cost,
             )
 
-        # 2D scan doesn't fit at requested resolution — try smaller 2D first.
         v1_range = plan.v1_range or (
             self.state.voltage_bounds["vg1"]["min"],
             self.state.voltage_bounds["vg1"]["max"],
@@ -635,12 +551,11 @@ class ExecutiveAgent:
                 resolution=res,
                 rationale=(
                     f"{plan.rationale} "
-                    f"(resolution reduced {requested_res}→{res} to fit budget)"
+                    f"(resolution reduced {requested_res}->{res} to fit budget)"
                 ),
                 info_gain_per_cost=plan.info_gain_per_cost,
             )
 
-        # Even 8×8 doesn't fit — fall back to line scan.
         steps = max(2, min(128, remaining))
         return MeasurementPlan(
             modality=MeasurementModality.LINE_SCAN,
