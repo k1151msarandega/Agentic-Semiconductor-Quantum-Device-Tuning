@@ -111,12 +111,22 @@ def main():
     train_time = time.time() - t1
     print(f"\nEnsemble trained in {train_time:.1f}s")
 
-    # Final validation accuracy
-    val_preds = []
-    for arr, true_label in zip(X_val, y_val):
-        pred, _, _ = ensemble.classify(arr.squeeze())
-        val_preds.append(pred)
-    val_acc = float(np.mean(np.array(val_preds) == y_val))
+    # Validate directly — X_val already has log_preprocess applied,
+    # so we bypass _prepare() and go straight to the model.
+    device_t = torch.device(args.device)
+    X_val_t = torch.from_numpy(X_val).float().to(device_t)
+    y_val_t = torch.from_numpy(y_val).long()
+    
+    correct = 0
+    ensemble_models = ensemble.models
+    with torch.no_grad():
+        for i in range(0, len(X_val), 128):
+            xb = X_val_t[i:i+128]
+            # Mean logits across ensemble
+            logits = torch.stack([m(xb) for m in ensemble_models]).mean(0)
+            preds = logits.argmax(dim=1).cpu()
+            correct += (preds == y_val_t[i:i+128]).sum().item()
+    val_acc = correct / len(y_val)
     print(f"Final val accuracy: {val_acc:.4f}")
 
     # -----------------------------------------------------------------------
