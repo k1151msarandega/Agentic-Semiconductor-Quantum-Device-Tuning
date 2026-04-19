@@ -432,6 +432,34 @@ class ExecutiveAgent:
         )
         self.state.apply_move(safe_dv)
 
+        # Take a local measurement at the new voltage to update the belief state.
+        # Without this, most_likely_state() never converges — navigation moves
+        # blindly and the convergence check always fails.
+        nav_v1 = self.state.current_voltage.vg1
+        nav_v2 = self.state.current_voltage.vg2
+        nav_plan = MeasurementPlan(
+            modality=MeasurementModality.COARSE_2D,
+            v1_range=(nav_v1 - 0.15, nav_v1 + 0.15),
+            v2_range=(nav_v2 - 0.15, nav_v2 + 0.15),
+            resolution=16,
+            rationale="NAVIGATION: local scan to update belief state after voltage move",
+        )
+        nav_plan = self._fit_plan_to_remaining_budget(nav_plan)
+        nav_tr = self.translator.execute(nav_plan)
+        if nav_tr.measurement is not None:
+            nav_m = nav_tr.measurement
+            self.state.add_measurement(nav_m)
+            nav_dqc = self.dqc.assess(nav_m)
+            self.state.add_dqc_result(nav_dqc)
+            if nav_m.is_2d and nav_dqc.quality != DQCQuality.LOW:
+                if self.inspection_agent is not None:
+                    nav_cls, nav_ood = self.inspection_agent.inspect(nav_m, nav_dqc)
+                    self.state.add_classification(nav_cls)
+                    self.state.add_ood_result(nav_ood)
+                    self.belief_updater.update_from_2d(nav_m, nav_cls)
+                else:
+                    self.belief_updater.update_from_2d(nav_m)
+
         most_likely = self.state.belief.most_likely_state()
         target_reached = (most_likely == (1, 1))
         belief_confidence = self.state.belief.charge_probs.get((1, 1), 0.0)
