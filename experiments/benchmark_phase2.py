@@ -52,8 +52,8 @@ def main():
     parser = argparse.ArgumentParser(description="Phase 2 benchmark")
     parser.add_argument("--n-trials", type=int, default=100,
                         help="Number of simulation trials (default: 100)")
-    parser.add_argument("--budget", type=int, default=2048,
-                        help="Measurement budget per trial (default: 2048)")
+    parser.add_argument("--budget", type=int, default=8192,
+                        help="Measurement budget per trial safety cap (default: 8192)")
     parser.add_argument("--max-steps", type=int, default=100,
                         help="Max control steps per trial (default: 100)")
     parser.add_argument("--fast", action="store_true",
@@ -69,9 +69,9 @@ def main():
 
     if args.fast:
         args.n_trials = 10
-        args.budget = 512
-        args.max_steps = 50  # Needs to be high enough for full stage sequence
-        print("FAST MODE: 10 trials, 512 budget, 50 max steps")
+        args.budget = 4096   # was 512 — needs headroom for 6-stage pipeline
+        args.max_steps = 50
+        print("FAST MODE: 10 trials, 4096 budget, 50 max steps")
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
