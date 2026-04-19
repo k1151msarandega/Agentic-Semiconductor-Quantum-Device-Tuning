@@ -215,6 +215,19 @@ class ExecutiveAgent:
                     self.state.config["survey_peak_vg2"] = peak_vg2
                     self.state.config["survey_peak_snr_db"] = dqc.snr_db
 
+        elif peak_quality > 0.2 and arr.ndim == 1 and len(arr) > 1:
+            # LINE_SCAN: store vg1 peak position. vg2 is unknown from a 1D scan;
+            # use current_voltage.vg2 as the best available estimate. The
+            # HYPERSURFACE_SEARCH ±0.5V window around this point will expose
+            # the transition along vg2 if it is close to the current vg2.
+            v_lo = m.v1_range[0] if m.v1_range else self.state.voltage_bounds["vg1"]["min"]
+            v_hi = m.v1_range[1] if m.v1_range else self.state.voltage_bounds["vg1"]["max"]
+            peak_idx = int(np.argmax(arr))
+            peak_vg1 = v_lo + (peak_idx / (len(arr) - 1)) * (v_hi - v_lo)
+            self.state.config["survey_peak_vg1"] = peak_vg1
+            self.state.config["survey_peak_vg2"] = self.state.current_voltage.vg2
+            self.state.config["survey_peak_snr_db"] = dqc.snr_db
+
         return survey_result(peak_found=peak_quality > 0.2, peak_quality=peak_quality)
 
     def _run_hypersurface_search(self) -> StageResult:
