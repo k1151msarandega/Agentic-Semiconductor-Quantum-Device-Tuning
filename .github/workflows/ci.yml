@@ -146,13 +146,13 @@ jobs:
         run: |
           if [ "${CHECKPOINT_READY:-0}" = "1" ]; then
             python experiments/benchmark_phase2.py \
-              --budget 2048 \
+              --budget 8192 \
               --n-trials 50 \
               --max-steps 100 \
               --out /tmp/phase2_benchmark
           else
             python experiments/benchmark_phase2.py \
-              --budget 2048 \
+              --budget 8192 \
               --n-trials 50 \
               --max-steps 100 \
               --skip-missing-checkpoints \
