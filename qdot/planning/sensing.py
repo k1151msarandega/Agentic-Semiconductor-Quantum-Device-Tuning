@@ -32,12 +32,12 @@ from qdot.core.state import BeliefState
 from qdot.simulator.cim import ConstantInteractionDevice
 
 
-# Cost model in measurement points (blueprint §5.4)
+# Cost model in actual measurement points (resolution² for 2D, steps for 1D)
 MODALITY_COST: Dict[MeasurementModality, int] = {
-    MeasurementModality.LINE_SCAN:   128,
-    MeasurementModality.COARSE_2D:   256,
-    MeasurementModality.LOCAL_PATCH: 1024,
-    MeasurementModality.FINE_2D:     4096,
+    MeasurementModality.LINE_SCAN:    128,   # 128 steps
+    MeasurementModality.COARSE_2D:   1024,   # 32×32 — was incorrectly 256
+    MeasurementModality.LOCAL_PATCH: 2304,   # 48×48 — was incorrectly 1024
+    MeasurementModality.FINE_2D:     4096,   # 64×64 — correct
 }
 
 MODALITY_RESOLUTION: Dict[MeasurementModality, int] = {
