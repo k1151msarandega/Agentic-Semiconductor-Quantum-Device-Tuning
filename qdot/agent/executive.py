@@ -277,8 +277,16 @@ class ExecutiveAgent:
         dqc = self.dqc.assess(m)
         self.state.add_dqc_result(dqc)
 
-        boundary_found = dqc.snr_db >= 5.0
-        proximity_confidence = float(np.clip(dqc.snr_db / 20.0, 0.0, 1.0))
+        # Use DQC quality rather than raw SNR. The variance-based SNR estimator
+        # underestimates narrow Coulomb transition lines (the 3×3 mean filter
+        # treats a single-pixel-wide charge boundary as high-frequency noise).
+        # DQC already accounts for this via the dynamic_range bypass — trust it.
+        boundary_found = dqc.quality != DQCQuality.LOW
+        proximity_confidence = (
+            1.0 if dqc.quality == DQCQuality.HIGH else
+            0.6 if dqc.quality == DQCQuality.MODERATE else
+            0.0
+        )
 
         if boundary_found and m.array is not None:
             arr = np.asarray(m.array)
