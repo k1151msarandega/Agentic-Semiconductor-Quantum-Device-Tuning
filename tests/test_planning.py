@@ -253,11 +253,11 @@ class TestActiveSensingPolicy:
         assert plan.modality in MeasurementModality
 
     def test_cost_model_matches_blueprint(self):
-        """Blueprint §5.4: LINE_SCAN=128, COARSE_2D=256, LOCAL=1024, FINE=4096."""
+        """Costs must match actual point consumption: res² for 2D, steps for 1D."""
         assert MODALITY_COST[MeasurementModality.LINE_SCAN] == 128
-        assert MODALITY_COST[MeasurementModality.COARSE_2D] == 256
-        assert MODALITY_COST[MeasurementModality.LOCAL_PATCH] == 1024
-        assert MODALITY_COST[MeasurementModality.FINE_2D] == 4096
+        assert MODALITY_COST[MeasurementModality.COARSE_2D] == 1024   # 32×32
+        assert MODALITY_COST[MeasurementModality.LOCAL_PATCH] == 2304  # 48×48
+        assert MODALITY_COST[MeasurementModality.FINE_2D] == 4096      # 64×64
 
     def test_modality_values_match_types_py(self):
         """MeasurementModality values must match exactly what types.py defines."""
