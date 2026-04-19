@@ -260,7 +260,7 @@ class ExecutiveAgent:
             modality=MeasurementModality.COARSE_2D,
             v1_range=(v1_lo, v1_hi),
             v2_range=(v2_lo, v2_hi),
-            resolution=32,
+            resolution=16,   # was 32 — boundary confirmation only, not CNN input
             rationale=(
                 "HYPERSURFACE_SEARCH: local scan around survey peak to confirm "
                 "charge boundary is visible before classification"
