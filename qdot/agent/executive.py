@@ -333,15 +333,23 @@ class ExecutiveAgent:
             "survey_peak_vg2", self.state.current_voltage.vg2
         )
 
-        survey_snr = self.state.config.get("survey_peak_snr_db", -999.0)
-        peak_is_reliable = survey_snr >= 5.0
-
-        if peak_is_reliable:
-            v1_range = (centre_vg1 - 0.2, centre_vg1 + 0.2)
-            v2_range = (centre_vg2 - 0.2, centre_vg2 + 0.2)
-        else:
-            v1_range = (vg1_min, vg1_max)
-            v2_range = (vg2_min, vg2_max)
+        # Always use a wide window centred on the refined peak from
+        # HYPERSURFACE_SEARCH.  The CNN was trained on windows of
+        # ±(1.5 × coulomb_period) ≈ ±3–24 V half-width.  The old
+        # ±0.2 V "high-resolution local scan" was 17× narrower than
+        # the minimum training window — the CNN classified every such
+        # patch as MISC.  ±2.0 V covers at least one full Coulomb
+        # period for all benchmark params (E_c ≤ 1.8, lever ≥ 0.65
+        # → period ≈ 2.8 V) and is well within the ±3 V bounds.
+        half_width = 2.0
+        v1_range = (
+            max(vg1_min, centre_vg1 - half_width),
+            min(vg1_max, centre_vg1 + half_width),
+        )
+        v2_range = (
+            max(vg2_min, centre_vg2 - half_width),
+            min(vg2_max, centre_vg2 + half_width),
+        )
 
         plan = MeasurementPlan(
             modality=MeasurementModality.COARSE_2D,
