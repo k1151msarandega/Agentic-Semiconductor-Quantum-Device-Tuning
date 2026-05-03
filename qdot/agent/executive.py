@@ -355,7 +355,7 @@ class ExecutiveAgent:
             modality=MeasurementModality.COARSE_2D,
             v1_range=v1_range,
             v2_range=v2_range,
-            resolution=32,
+            resolution=64,   # was 32 — must match training data resolution (CIMDataset generates 64×64)
             rationale="CHARGE_ID: 2D scan required for InspectionAgent classification",
         )
         plan = self._fit_plan_to_remaining_budget(plan)
