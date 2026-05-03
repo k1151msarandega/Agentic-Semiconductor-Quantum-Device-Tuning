@@ -179,10 +179,23 @@ class ExecutiveAgent:
             self.state.voltage_bounds["vg2"]["min"],
             self.state.voltage_bounds["vg2"]["max"],
         )
-
-        plan = self.sensing_policy.select(self.state.belief, v1_range, v2_range)
+    
+        # FIX: Always do a systematic COARSE_2D sweep for the initial survey.
+        # The sensing policy is CIM-model-dependent; when device parameters differ
+        # from the prior (which they always do in the benchmark), it degrades to
+        # a 1D scan at vg2=0, which misses 2D charge features entirely.
+        # A systematic 2D scan is model-agnostic and guaranteed to capture any
+        # charge structure within the voltage bounds.
+        plan = MeasurementPlan(
+            modality=MeasurementModality.COARSE_2D,
+            v1_range=v1_range,
+            v2_range=v2_range,
+            resolution=32,
+            rationale="COARSE_SURVEY: systematic 2D sweep to locate charge signal",
+        )
         plan = self._fit_plan_to_remaining_budget(plan)
-
+    
+        # Everything below this line stays exactly as it was
         tr = self.translator.execute(plan)
 
         if tr.measurement is None:
