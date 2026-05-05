@@ -97,7 +97,7 @@ DEFAULT_STAGE_CONFIGS: Dict[TuningStage, StageConfig] = {
     TuningStage.NAVIGATION: StageConfig(
         stage=TuningStage.NAVIGATION,
         success_threshold=0.15,   # was 0.7; MAP-based success — belief just needs to concentrate on (1,1)
-        max_retries=3,
+        max_retries=20,
         max_backtracks=2,
         description="Navigate to target (1,1) charge state via BO",
     ),
