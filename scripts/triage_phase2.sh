@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -u
+# NOTE: benchmark_phase2.py requires a trained checkpoint at
+# experiments/checkpoints/phase1/. Run train_phase1.py first.
+# Use --skip-missing-checkpoints only for pure orchestration CI checks.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR" || exit 2
@@ -17,7 +20,7 @@ declare -a CMDS=(
   "pytest tests/test_agent.py -v --tb=short"
   "pytest tests/test_planning.py -v --tb=short"
   "pytest tests/test_integration_phase012.py -v --tb=short"
-  "python experiments/benchmark_phase2.py --fast --skip-missing-checkpoints --out /tmp/phase2_benchmark"
+  "python experiments/benchmark_phase2.py --fast --out /tmp/phase2_benchmark"
 )
 
 declare -a STATUSES=()
