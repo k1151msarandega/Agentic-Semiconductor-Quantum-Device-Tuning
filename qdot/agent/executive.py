@@ -341,7 +341,7 @@ class ExecutiveAgent:
         # patch as MISC.  ±2.0 V covers at least one full Coulomb
         # period for all benchmark params (E_c ≤ 1.8, lever ≥ 0.65
         # → period ≈ 2.8 V) and is well within the ±3 V bounds.
-        half_width = 2.0
+        half_width = 3.5
         v1_range = (
             max(vg1_min, centre_vg1 - half_width),
             min(vg1_max, centre_vg1 + half_width),
