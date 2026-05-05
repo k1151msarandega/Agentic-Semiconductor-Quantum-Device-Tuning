@@ -44,7 +44,7 @@ from qdot.planning.state_machine import (
 )
 
 from qdot.agent.translator import TranslationAgent
-
+from qdot.agent.narrator import LLMNarrator
 
 class ExecutiveAgent:
     def __init__(
@@ -84,6 +84,7 @@ class ExecutiveAgent:
         self.sensing_policy = ActiveSensingPolicy()
         self.bo = MultiResBO(belief=state.belief, voltage_bounds=state.voltage_bounds)
         self.state_machine = StateMachine(state=state)
+        self.narrator = LLMNarrator(run_id=state.run_id)
         self.translator = TranslationAgent(adapter=adapter)
 
     # ------------------------------------------------------------------
@@ -137,8 +138,22 @@ class ExecutiveAgent:
                 action={"to_stage": new_stage.name},
                 rationale=rationale,
             )
+            self.narrator.narrate_transition(
+                from_stage=stage.name,
+                to_stage=new_stage.name,
+                rationale=rationale,
+                step=self.control_steps,
+                measurements_used=self.state.total_measurements,
+                confidence=result.confidence,
+            )
 
         if hitl_triggered:
+            self.narrator.narrate_hitl(
+                stage=self.state.stage.name,
+                trigger_reason=rationale,
+                risk_score=0.70,
+                step=self.control_steps,
+            )
             self._handle_hitl(rationale)
 
         return not self._should_terminate()
@@ -704,6 +719,7 @@ class ExecutiveAgent:
     def _mission_summary(self) -> dict:
         dense_baseline = 64 * 64
         reduction = 1.0 - (self.state.total_measurements / dense_baseline)
+        self.narrator.drain()
         return {
             "success": self.state.stage == TuningStage.COMPLETE,
             "final_stage": self.state.stage.name,
