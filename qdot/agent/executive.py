@@ -217,7 +217,9 @@ class ExecutiveAgent:
             self.belief_updater.update_from_2d(m)
 
             if peak_quality > 0.2 and arr.size > 0 and arr.ndim >= 2:
-                row, col = np.unravel_index(np.argmax(arr), arr.shape)
+                gy, gx = np.gradient(arr)
+                grad_mag = np.sqrt(gx**2 + gy**2)
+                row, col = np.unravel_index(np.argmax(grad_mag), grad_mag.shape)
                 v1_lo, v1_hi = m.v1_range or (-1.0, 1.0)
                 v2_lo, v2_hi = m.v2_range or (-1.0, 1.0)
                 res = arr.shape[0]
