@@ -36,7 +36,7 @@ class DatasetConfig:
     noise_aug_sigma: float = 0.02
     blur_aug_prob: float = 0.3
     # Double-dot
-    dd_E_c_range: Tuple[float, float] = (1.8, 5.5)
+    dd_E_c_range: Tuple[float, float] = (1.0, 5.5)
     dd_t_c_range: Tuple[float, float] = (0.05, 0.6)
     dd_T_range: Tuple[float, float] = (0.01, 0.12)
     dd_lever_range: Tuple[float, float] = (0.35, 0.85)
