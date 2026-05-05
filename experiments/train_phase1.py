@@ -43,6 +43,8 @@ def main():
     parser.add_argument("--out", type=str, default="experiments/checkpoints/phase1",
                         help="Output directory for checkpoints")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--out", type=str, default="experiments/checkpoints/phase1",
+                        help="Checkpoint output directory")
     args = parser.parse_args()
 
     out_dir = Path(args.out)
