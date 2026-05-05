@@ -182,8 +182,8 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Use benchmark-representative CIM params (seed 1000 = benchmark trial 0)
-    E_c = 3.0
-    lever = 0.55
+    E_c = 1.5
+    lever = 0.65
     adapter = CIMSimulatorAdapter(
         device_id="diag",
         params={"E_c1": E_c, "E_c2": E_c + 0.2, "t_c": 0.3,
