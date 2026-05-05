@@ -355,7 +355,7 @@ class ExecutiveAgent:
             modality=MeasurementModality.COARSE_2D,
             v1_range=v1_range,
             v2_range=v2_range,
-            resolution=64,   # was 32 — must match training data resolution (CIMDataset generates 64×64)
+            resolution=32,   # CNN._prepare() resizes to 64×64 at inference; 32×32 input = 1024 pts not 4096
             rationale="CHARGE_ID: 2D scan required for InspectionAgent classification",
         )
         plan = self._fit_plan_to_remaining_budget(plan)
@@ -462,7 +462,7 @@ class ExecutiveAgent:
             modality=MeasurementModality.COARSE_2D,
             v1_range=(nav_v1 - 0.15, nav_v1 + 0.15),
             v2_range=(nav_v2 - 0.15, nav_v2 + 0.15),
-            resolution=16,
+            resolution=8,    # was 16. 64 pts per nav step instead of 256; allows 20 steps within budget
             rationale="NAVIGATION: local scan to update belief state after voltage move",
         )
         nav_plan = self._fit_plan_to_remaining_budget(nav_plan)
