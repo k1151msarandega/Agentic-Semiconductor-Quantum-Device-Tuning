@@ -87,8 +87,8 @@ class ExperimentState:
     # constraint was an arbitrary hackathon placeholder that made the benchmark
     # unsolvable by construction.  Override per device class via ExperimentState.new().
     voltage_bounds: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
-        "vg1": {"min": -3.0, "max": 3.0},
-        "vg2": {"min": -3.0, "max": 3.0},
+        "vg1": {"min": -8.0, "max": 8.0},
+        "vg2": {"min": -8.0, "max": 8.0},
     })
     step_caps: Dict[str, float] = field(default_factory=lambda: {"l1_max": 0.10})
 
