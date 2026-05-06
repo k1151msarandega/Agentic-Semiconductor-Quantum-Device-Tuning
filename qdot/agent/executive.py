@@ -144,6 +144,14 @@ class ExecutiveAgent:
                 step=self.control_steps,
                 measurements_used=self.state.total_measurements,
                 confidence=result.confidence,
+                budget_total=self.measurement_budget,
+                snr_db=self.state.last_dqc.snr_db if self.state.last_dqc else None,
+                dqc_quality=self.state.last_dqc.quality.value if self.state.last_dqc else None,
+                belief_top_state=str(self.state.belief.most_likely_state()),
+                current_voltage=(
+                    self.state.current_voltage.vg1,
+                    self.state.current_voltage.vg2,
+                ),
             )
 
         if hitl_triggered:
