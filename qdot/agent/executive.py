@@ -137,14 +137,13 @@ class ExecutiveAgent:
                 action={"to_stage": new_stage.name},
                 rationale=rationale,
             )
-            self.narrator.narrate_transition(
+            self.narrator.log_transition(
                 from_stage=stage.name,
                 to_stage=new_stage.name,
                 rationale=rationale,
                 step=self.control_steps,
                 measurements_used=self.state.total_measurements,
                 confidence=result.confidence,
-                budget_total=self.measurement_budget,
                 snr_db=self.state.last_dqc.snr_db if self.state.last_dqc else None,
                 dqc_quality=self.state.last_dqc.quality.value if self.state.last_dqc else None,
                 belief_top_state=str(self.state.belief.most_likely_state()),
@@ -153,13 +152,43 @@ class ExecutiveAgent:
                     self.state.current_voltage.vg2,
                 ),
             )
+            # Report exceptions: stage failures and budget warnings
+            if new_stage == stage and result.confidence < 0.3:
+                self.narrator.report_exception(
+                    stage=stage.name,
+                    exception_type="stage_failure",
+                    step=self.control_steps,
+                    measurements_used=self.state.total_measurements,
+                    budget_total=self.measurement_budget,
+                    details={"confidence": round(result.confidence, 3),
+                             "consecutive_backtracks": self.state.consecutive_backtracks},
+                )
+            remaining_pct = 100 * (1 - self.state.total_measurements / self.measurement_budget)
+            if remaining_pct < 20:
+                self.narrator.report_exception(
+                    stage=stage.name,
+                    exception_type="budget_warning",
+                    step=self.control_steps,
+                    measurements_used=self.state.total_measurements,
+                    budget_total=self.measurement_budget,
+                    details={"remaining_pct": round(remaining_pct, 1)},
+                )
 
         if hitl_triggered:
-            self.narrator.narrate_hitl(
+            recommendation = self.narrator.support_hitl(
                 stage=self.state.stage.name,
                 trigger_reason=rationale,
                 risk_score=0.70,
                 step=self.control_steps,
+                measurements_used=self.state.total_measurements,
+                budget_total=self.measurement_budget,
+                proposal_summary=f"Stage {self.state.stage.name} decision point",
+                physics_context={
+                    "dqc": self.state.last_dqc.quality.value if self.state.last_dqc else "unknown",
+                    "ood": round(self.state.last_ood.score, 3) if self.state.last_ood else 0.0,
+                    "belief": str(self.state.belief.most_likely_state()),
+                    "backtracks": self.state.consecutive_backtracks,
+                },
             )
             self._handle_hitl(rationale)
 
@@ -517,6 +546,17 @@ class ExecutiveAgent:
                     self.state.add_classification(nav_cls)
                     self.state.add_ood_result(nav_ood)
                     self.belief_updater.update_from_2d(nav_m, nav_cls)
+                    if nav_ood.score > 8.0:
+                        self.narrator.report_exception(
+                            stage="NAVIGATION",
+                            exception_type="ood_spike",
+                            step=self.control_steps,
+                            measurements_used=self.state.total_measurements,
+                            budget_total=self.measurement_budget,
+                            details={"ood_score": round(nav_ood.score, 2),
+                                     "vg1": round(nav_v1, 3),
+                                     "vg2": round(nav_v2, 3)},
+                        )
                 else:
                     self.belief_updater.update_from_2d(nav_m)
 
@@ -742,6 +782,16 @@ class ExecutiveAgent:
         dense_baseline = 64 * 64
         reduction = 1.0 - (self.state.total_measurements / dense_baseline)
         self.narrator.drain()
+        self.narrator.summarise_run(
+            final_stage=self.state.stage.name,
+            success=self.state.stage == TuningStage.COMPLETE,
+            total_measurements=self.state.total_measurements,
+            budget_total=self.measurement_budget,
+            total_steps=self.control_steps,
+            n_backtracks=self.state.total_backtracks,
+            n_hitl=len(self.state.hitl_events),
+            n_exceptions=self.narrator.n_exceptions(),
+        )
         return {
             "success": self.state.stage == TuningStage.COMPLETE,
             "final_stage": self.state.stage.name,
