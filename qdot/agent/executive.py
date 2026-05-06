@@ -10,7 +10,6 @@ import math
 import time
 from typing import Optional
 
-
 import numpy as np
 
 from qdot.core.types import (
@@ -436,7 +435,9 @@ class ExecutiveAgent:
             step=self.state.step + 1,
         )
 
-        if risk >= HITLManager.HITL_THRESHOLD:
+        nav_step = self.state_machine._retries.get(TuningStage.NAVIGATION, 0)
+        effective_threshold = 0.92 if self.state.stage == TuningStage.NAVIGATION else HITLManager.HITL_THRESHOLD
+        if risk >= effective_threshold:
             event = self.hitl_manager.queue_request(
                 run_id=self.state.run_id,
                 step=self.state.step,
