@@ -155,9 +155,9 @@ class NavigationDiagnosticAgent(ExecutiveAgent):
 
         # Verdict
         print(f"\n  [STEP RESULT]")
-        print(f"    target_reached={result.target_reached}  "
+        print(f"    success={result.success}  "
               f"confidence={result.confidence:.4f}")
-        if result.target_reached:
+        if result.success:
             print(f"    ✓ NAVIGATION COMPLETE")
         else:
             remaining = self.measurement_budget - self.state.total_measurements
