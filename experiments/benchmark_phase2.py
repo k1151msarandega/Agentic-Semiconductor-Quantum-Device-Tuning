@@ -195,7 +195,7 @@ def run_trial(
     #   V_t ≈ -2.3 V  (range: -1.8 to -2.8 V across the ± perturbations)
     # This matches GaAs-class device physics and is reachable within the
     # ±3 V voltage bounds set in ExperimentState (state.py).
-    E_c_base = 1.5 + np.random.uniform(-0.3, 0.3)   # meV; was 3.0 (unreachable)
+    E_c_base = 2.5 + np.random.uniform(-0.3, 0.3)   # was 1.5, lever_arm stays 0.65
     t_c_base = 0.3 + np.random.uniform(-0.1, 0.1)
     adapter = CIMSimulatorAdapter(
         device_id=device_id,
