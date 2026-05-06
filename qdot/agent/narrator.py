@@ -68,27 +68,24 @@ class LLMNarrator:
 
         # API configuration
         base_url = os.environ.get("QDOT_LLM_BASE_URL", "")
-        api_key = os.environ.get(
-            "QDOT_LLM_API_KEY",
-            os.environ.get("ANTHROPIC_API_KEY", ""),
+        api_key = os.environ.get("QDOT_LLM_API_KEY", "EMPTY")
+        self._model = os.environ.get(
+            "QDOT_LLM_MODEL", "Qwen/Qwen2.5-1.5B-Instruct"
         )
-        self._model = os.environ.get("QDOT_LLM_MODEL", "claude-haiku-4-5-20251001")
-        self._use_anthropic = not base_url  # True = Anthropic SDK, False = OpenAI-compat
+        self._use_anthropic = False  # always use OpenAI-compatible (vLLM)
 
         if self.enabled:
-            if self._use_anthropic:
-                try:
-                    import anthropic
-                    self._client = anthropic.Anthropic(api_key=api_key)
-                except ImportError:
-                    print("[Narrator] anthropic package not installed — narration disabled.")
-                    self.enabled = False
+            if not base_url:
+                print("[Narrator] QDOT_LLM_BASE_URL not set — narration disabled.")
+                self.enabled = False
             else:
                 try:
                     import openai
-                    self._client = openai.OpenAI(base_url=base_url, api_key=api_key or "EMPTY")
+                    self._client = openai.OpenAI(
+                        base_url=base_url, api_key=api_key
+                    )
                 except ImportError:
-                    print("[Narrator] openai package not installed — narration disabled.")
+                    print("[Narrator] openai package not installed — run: pip install openai")
                     self.enabled = False
 
     # ------------------------------------------------------------------
