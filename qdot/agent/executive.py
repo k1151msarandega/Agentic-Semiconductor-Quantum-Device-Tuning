@@ -395,15 +395,28 @@ class ExecutiveAgent:
         classification, ood_result = self.inspection_agent.inspect(m, dqc)
         self.state.add_classification(classification)
         self.state.add_ood_result(ood_result)
-
         self.belief_updater.update_from_2d(m, classification)
+
+        # Move current_voltage to the survey peak so NAVIGATION starts
+        # in the correct region. Without this the agent navigates from
+        # (0,0) which is 5+ V from any charge structure — the BO can
+        # never converge within budget.
+        if classification.label.value in ("single-dot", "double-dot"):
+            self.translator.execute_voltage_move(
+                vg1=centre_vg1, vg2=centre_vg2,
+            )
+            self.state.apply_move(
+                VoltagePoint(
+                    vg1=centre_vg1 - self.state.current_voltage.vg1,
+                    vg2=centre_vg2 - self.state.current_voltage.vg2,
+                )
+            )
 
         return charge_id_result(
             label=classification.label.value,
             confidence=classification.confidence,
             physics_override=classification.physics_override,
         )
-
     def _run_navigation(self) -> StageResult:
         self.bo.update(self.state.bo_history)
 
