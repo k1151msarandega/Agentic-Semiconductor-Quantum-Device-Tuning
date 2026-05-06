@@ -28,26 +28,24 @@ import time
 import threading
 from typing import Optional
 
-SYSTEM_PROMPT = """You are an expert quantum physicist overseeing an autonomous \
-semiconductor quantum dot tuning experiment in real time.
+SYSTEM_PROMPT = """You are Dr. Q, an expert experimental physicist specialising in \
+semiconductor quantum dot devices. You are observing an autonomous AI agent tune a \
+double quantum dot in real time and narrating its decisions to a lab operator.
 
-The system is a 6-stage POMDP agent navigating a 2D voltage space to reach \
-the (1,1) charge state — one electron per quantum dot — using a Constant \
-Interaction Model simulator, Bayesian optimisation, and a CNN charge classifier.
+The agent navigates a 2D gate voltage space (vg1, vg2) using a POMDP planner, \
+Bayesian optimisation, and a CNN charge classifier to reach the (1,1) charge state — \
+exactly one electron per dot. This is required for spin qubit operation.
 
-Stages in order:
-  BOOTSTRAPPING → COARSE_SURVEY → HYPERSURFACE_SEARCH → CHARGE_ID \
-→ NAVIGATION → VERIFICATION → COMPLETE
+Pipeline stages:
+  BOOTSTRAPPING → COARSE_SURVEY → HYPERSURFACE_SEARCH → CHARGE_ID → NAVIGATION → VERIFICATION
 
-Your role:
-- Narrate each stage transition in 2-3 clear sentences a lab operator \
-  can understand without a physics PhD.
-- When HITL is triggered, explain the risk concisely and what the operator \
-  should watch for.
-- When something fails, diagnose why based on what you have observed so far \
-  in this run — you have full episodic memory.
-- Be precise, grounded, and honest. Do not speculate beyond what the data shows.
-- Keep responses under 80 words."""
+Your style:
+- Speak directly and naturally, like a physicist watching an experiment. Not bullet points, not headers.
+- Reference the actual numbers you are given — voltages, SNR, confidence, budget remaining.
+- Be concise: 2-3 sentences maximum per narration.
+- When things go wrong, say so plainly and say what you think is happening.
+- Never say "In Stage X" as your opening. Never use corporate language.
+- You have memory of the full run so far — use it."""
 
 
 class LLMNarrator:
@@ -100,16 +98,33 @@ class LLMNarrator:
         step: int,
         measurements_used: int,
         confidence: float,
+        budget_total: int = 4096,
+        snr_db: float = None,
+        dqc_quality: str = None,
+        belief_top_state: str = None,
+        current_voltage: tuple = None,
     ) -> None:
-        """Called after every stage transition. Non-blocking."""
         if not self.enabled:
             return
+        budget_pct = int(100 * measurements_used / budget_total)
+        details = []
+        if snr_db is not None:
+            details.append(f"SNR {snr_db:.1f}dB")
+        if dqc_quality is not None:
+            details.append(f"data quality {dqc_quality}")
+        if belief_top_state is not None:
+            details.append(f"most likely charge state {belief_top_state}")
+        if current_voltage is not None:
+            details.append(
+                f"gates at vg1={current_voltage[0]:+.3f}V, vg2={current_voltage[1]:+.3f}V"
+            )
+        physics_context = ". ".join(details)
+
         user_msg = (
-            f"[Step {step} | {measurements_used} measurements used]\n"
-            f"Stage transition: {from_stage} → {to_stage}\n"
-            f"Agent rationale: {rationale}\n"
-            f"Confidence: {confidence:.3f}\n"
-            f"Please narrate this transition for the operator."
+            f"Step {step} — {from_stage} → {to_stage} "
+            f"(confidence {confidence:.2f}, {budget_pct}% of measurement budget used).\n"
+            f"Physics: {physics_context}.\n"
+            f"Agent log: {rationale}"
         )
         self._fire(user_msg, tag=f"transition:{from_stage}→{to_stage}")
 
