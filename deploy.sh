@@ -21,6 +21,14 @@ echo ""
 cd "$(dirname "$0")"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Auto-update repo from GitHub
+# ─────────────────────────────────────────────────────────────────────────────
+echo "► Updating repository from GitHub..."
+git fetch --all
+git reset --hard origin/main
+echo "  ✓ Repo is up to date"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 1. Ensure conda is initialized (even in non-interactive shells)
 # ─────────────────────────────────────────────────────────────────────────────
 if [ -f ~/miniconda3/etc/profile.d/conda.sh ]; then
