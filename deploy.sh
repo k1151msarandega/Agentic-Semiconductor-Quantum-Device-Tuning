@@ -1,7 +1,6 @@
 #!/bin/bash
 # deploy.sh — SimQuantum startup for AMD MI300X
 # Run from repo root: bash deploy.sh
-# Access the app at http://<your-mi300x-ip>:8501
 
 set -e
 
@@ -16,30 +15,63 @@ echo "  SimQuantum — AMD MI300X startup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# ── 1. Kill anything already using these ports ─────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 0. Ensure script runs from its own directory (repo root)
+# ─────────────────────────────────────────────────────────────────────────────
+cd "$(dirname "$0")"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Ensure conda is initialized (even in non-interactive shells)
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -f ~/miniconda3/etc/profile.d/conda.sh ]; then
+    source ~/miniconda3/etc/profile.d/conda.sh
+elif [ -f /root/miniconda3/etc/profile.d/conda.sh ]; then
+    source /root/miniconda3/etc/profile.d/conda.sh
+else
+    echo "✗ Could not find conda.sh — is Miniconda installed?"
+    exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Auto-create conda env if missing
+# ─────────────────────────────────────────────────────────────────────────────
+if ! conda env list | grep -q "$CONDA_ENV"; then
+    echo "► Creating conda env '$CONDA_ENV'..."
+    conda create -n "$CONDA_ENV" python=3.10 -y
+fi
+
+echo "► Activating conda env '$CONDA_ENV'..."
+conda activate "$CONDA_ENV"
+echo "  Python: $(python --version)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Install required dependencies (GPU-safe)
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "► Ensuring dependencies are installed..."
+pip install -q streamlit plotly openai tqdm pyyaml joblib
+pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.1
+pip install -q vllm
+echo "  ✓ Dependencies ready"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Kill anything already using ports
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
 echo "► Clearing ports $VLLM_PORT and $STREAMLIT_PORT..."
 fuser -k ${VLLM_PORT}/tcp 2>/dev/null && echo "  killed process on $VLLM_PORT" || echo "  port $VLLM_PORT was free"
 fuser -k ${STREAMLIT_PORT}/tcp 2>/dev/null && echo "  killed process on $STREAMLIT_PORT" || echo "  port $STREAMLIT_PORT was free"
 sleep 1
 
-# ── 2. Activate conda env ──────────────────────────────────────────────────
-echo ""
-echo "► Activating conda env '$CONDA_ENV'..."
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate "$CONDA_ENV"
-echo "  Python: $(python --version)"
-
-# ── 3. Install any missing deps quietly ───────────────────────────────────
-echo ""
-echo "► Checking dependencies..."
-pip install -q streamlit plotly openai 2>/dev/null
-echo "  Done."
-
-# ── 4. Set environment variables ───────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Set environment variables for the app
+# ─────────────────────────────────────────────────────────────────────────────
 export QDOT_LLM_BASE_URL="http://localhost:${VLLM_PORT}"
 export QDOT_LLM_MODEL="$MODEL"
 
-# ── 5. Start vLLM in background ────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Start vLLM in background
+# ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "► Starting vLLM ($MODEL) on port $VLLM_PORT..."
 nohup vllm serve "$MODEL" \
@@ -48,10 +80,13 @@ nohup vllm serve "$MODEL" \
     --max-model-len 4096 \
     --gpu-memory-utilization 0.4 \
     > /tmp/vllm.log 2>&1 &
+
 VLLM_PID=$!
 echo "  vLLM PID: $VLLM_PID (logs: tail -f /tmp/vllm.log)"
 
-# ── 6. Wait for vLLM to be ready ──────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Wait for vLLM to be ready
+# ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "► Waiting for vLLM to be ready..."
 for i in $(seq 1 60); do
@@ -68,7 +103,9 @@ for i in $(seq 1 60); do
 done
 echo ""
 
-# ── 7. Launch Streamlit ────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Launch Streamlit
+# ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "► Starting Streamlit on port $STREAMLIT_PORT..."
 echo ""
