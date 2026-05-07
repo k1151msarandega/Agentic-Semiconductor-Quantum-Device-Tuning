@@ -215,7 +215,7 @@ def _init():
         llm_url="",   # persists across reruns
         llm_model="Qwen/Qwen2.5-1.5B-Instruct",
         use_cnn=True,
-        meas_budget=4096,
+        meas_budget=8096,
         max_steps=140,
     )
     for k,v in d.items():
@@ -739,7 +739,7 @@ if done_event and done_event.is_set() and running:
     if not already_summarised and exp_state:
         stage  = exp_state.stage.name
         meas   = exp_state.total_measurements
-        budget = st.session_state.agent.measurement_budget if st.session_state.agent else 4096
+        budget = st.session_state.agent.measurement_budget if st.session_state.agent else 8096
         bt     = exp_state.total_backtracks
         _add_msg("user",
             f"The run just finished — it stopped at {stage}. "
