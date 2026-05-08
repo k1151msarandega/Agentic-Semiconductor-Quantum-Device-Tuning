@@ -55,6 +55,10 @@ if curl -s http://localhost:$VLLM_PORT/v1/models > /dev/null 2>&1; then
 else
     echo "  Starting vLLM..."
     conda deactivate
+    export HIP_VISIBLE_DEVICES=0
+    export ROCR_VISIBLE_DEVICES=0
+    export VLLM_TARGET_DEVICE=rocm
+    nohup vllm serve $MODEL \
     nohup vllm serve $MODEL \
         --host 0.0.0.0 --port $VLLM_PORT \
         --gpu-memory-utilization 0.4 \
