@@ -21,6 +21,24 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 import streamlit as st
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Asset loading — read bytes once at startup; works on HF Spaces & local
+# ─────────────────────────────────────────────────────────────────────────────
+def _load_image_bytes(rel_path: str):
+    """Return image bytes from several candidate locations, or None."""
+    candidates = [
+        Path(__file__).parent / rel_path,          # local / droplet
+        Path(rel_path),                             # relative CWD
+        Path("/app") / rel_path,                   # HF Docker /app
+        Path("/home/user/app") / rel_path,          # HF alt mount
+    ]
+    for p in candidates:
+        if p.exists():
+            return p.read_bytes()
+    return None
+
+_DIAGRAM_IMG = _load_image_bytes("assets/simquantum.png")
+
 st.set_page_config(
     page_title="SimQuantum Tuning Lab",
     page_icon="⚛",
@@ -790,33 +808,43 @@ if exp_state is None:
                 "Ready. Set the vLLM endpoint in the sidebar to enable Qwen.\n\n"
                 "Type **start** to begin a tuning run, or ask me about the experiment.")
 
-    sl,sr = st.columns([3,2], gap="large")
+    sl, sr = st.columns([3, 2], gap="large")
     with sl:
+        # ── Hero: agent diagram ───────────────────────────────────────────────
+        if _DIAGRAM_IMG:
+            st.image(_DIAGRAM_IMG, use_container_width=True)
+        else:
+            st.markdown(
+                '<div class="card" style="text-align:center;padding:32px;color:#A8B0BC;'
+                'font-family:JetBrains Mono,monospace;font-size:11px">'
+                'assets/simquantum.png not found</div>',
+                unsafe_allow_html=True)
+
+        # ── Two info cards below the image ───────────────────────────────────
         st.markdown("""
-        <div class="card" style="padding:22px 24px">
-          <div class="card-title">What this system does</div>
-          <p style="font-size:13px;color:#5A6478;line-height:1.75;margin:0">
-            SimQuantum autonomously tunes a double quantum dot device to the
-            <strong>(1,1) charge state</strong> — one electron per dot — required
-            for spin qubit operation. 6-stage POMDP planner, 5-model CNN ensemble
-            (91.4% val acc), Bayesian optimisation. Qwen2.5-1.5B on AMD MI300X
-            acts as Dr. Q — ask it anything, in any register.
-          </p>
-        </div>
-        <div class="card">
-          <div class="card-title">Reading a stability diagram</div>
-          <p style="font-size:13px;color:#5A6478;line-height:1.75;margin:0">
-            Conductance G vs gate voltages (Vg₁, Vg₂).
-            Bright lines = Coulomb peaks (charge transitions).
-            Dark regions = Coulomb blockade (fixed electron number).
-            Intersections form a honeycomb: (0,0), (1,0), (0,1), <strong>(1,1)</strong>…
-            The agent navigates to the (1,1) diamond.
-          </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+          <div class="card" style="padding:16px 18px">
+            <div class="card-title">What this system does</div>
+            <p style="font-size:12px;color:#5A6478;line-height:1.7;margin:0">
+              A team of autonomous agents tunes a quantum dot device to the
+              <strong>(1,1) charge state</strong> — one electron per dot —
+              required for spin qubit operation. 6-stage POMDP, 5-model CNN
+              (91.4% val acc), Bayesian optimisation, particle filter belief.
+              Ask Dr.&nbsp;Q anything about the experiment, in any register.
+            </p>
+          </div>
+          <div class="card" style="padding:16px 18px">
+            <div class="card-title">Reading a stability diagram</div>
+            <p style="font-size:12px;color:#5A6478;line-height:1.7;margin:0">
+              Conductance G vs gate voltages (Vg₁, Vg₂).
+              Bright lines&nbsp;= charge transitions.
+              Dark regions&nbsp;= Coulomb blockade (fixed electrons).
+              The honeycomb intersections are charge states:
+              (0,0), (1,0), (0,1), <strong>(1,1)&nbsp;← target</strong>…
+            </p>
+          </div>
         </div>
         """, unsafe_allow_html=True)
-        img_path = Path(__file__).parent/"assets"/"simquantum.png"
-        if img_path.exists():
-            st.image(str(img_path), use_container_width=True)
     with sr:
         _render_chat()
 
@@ -899,9 +927,9 @@ else:
                     unsafe_allow_html=True)
         _spy(current_stg, bool(pending))
 
-        img_path = Path(__file__).parent/"assets"/"simquantum.png"
-        if img_path.exists():
-            st.image(str(img_path),use_container_width=True)
+        if _DIAGRAM_IMG:
+            with st.expander("Agent architecture diagram", expanded=False):
+                st.image(_DIAGRAM_IMG, use_container_width=True)
 
     with right:
         _render_chat()
