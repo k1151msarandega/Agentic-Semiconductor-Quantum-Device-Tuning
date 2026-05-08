@@ -1,75 +1,47 @@
-# qdot-agent
-
-**Agentic quantum dot tuning — clean-slate redesign.**
-
-Autonomous semiconductor quantum device tuning using a POMDP executive agent, physics-informed perception, multi-fidelity active sensing, and blocking human-in-the-loop oversight.
-
-> This is a research codebase in active development. Phase 0 (foundation) is complete. Phases 1–4 are in progress.
-
+---
+title: SimQuantum Tuning Lab
+emoji: ⚛
+colorFrom: gray
+colorTo: green
+sdk: streamlit
+sdk_version: 1.57.0
+app_file: app.py
+pinned: true
+license: mit
+short_description: Autonomous quantum dot tuning agent — AMD MI300X + Qwen2.5
 ---
 
-## Architecture
+# ⚛ SimQuantum Tuning Lab
 
-Four-layer hierarchy (see `docs/blueprint_v2.pdf` for full spec):
+**Autonomous quantum dot tuning · AMD Developer Hackathon 2025**
 
+SimQuantum is a 6-stage POMDP agent that autonomously tunes a double quantum dot
+device to the **(1,1) charge state** — one electron per dot — required for spin
+qubit operation.
+
+### What runs here (CPU demo)
+- ✅ CIM physics simulator — real semiconductor physics
+- ✅ Charge stability diagram visualisation
+- ✅ Particle filter belief state
+- ✅ 5-model CNN ensemble classifier (91.4% val acc, 51k training diagrams)
+- ✅ Bayesian optimisation planner
+- ✅ HITL safety critic
+- ⬡ Dr. Q (Qwen2.5-1.5B) — connect your own vLLM endpoint in the sidebar
+
+### Full GPU stack
+The complete system runs on **AMD Instinct MI300X** via ROCm with
+Qwen2.5-1.5B-Instruct served via vLLM. To connect Dr. Q, set the
+vLLM endpoint in the sidebar to your MI300X instance.
+
+### Architecture
 ```
-Layer 1 — Executive Agent     (POMDP planner + LLM reasoner)
-Layer 2 — Operational Intel   (Knowledge Agent, Translation Agent)  
-Layer 3 — Perception          (DQC Gatekeeper, Inspection Agent, CIM model)
-Layer 4 — Hardware            (Device Adapter, Safety Critic)
+BOOTSTRAPPING → COARSE_SURVEY → HYPERSURFACE_SEARCH → CHARGE_ID
+     ↓               ↓                  ↓                  ↓
+  DQC gate      32×32 sweep       16×16 local scan    CNN ensemble
+                                                      + OOD detector
 ```
+Navigation (→ VERIFICATION) is Phase 3 — active development.
 
-## Repository structure
-
-```
-qdot/
-├── core/         # Phase 0: foundation — types, state, governance, HITL
-├── hardware/     # Phase 0: device adapter ABC, safety critic
-├── simulator/    # CIM physics (ported from hackathon)
-├── perception/   # Phase 1: DQC gatekeeper, classifier, OOD detector
-├── planning/     # Phase 2: POMDP belief, active sensing, BO, state machine
-└── agent/        # Phase 2: executive agent, LLM interface
-tests/            # One test file per module; safety fuzz on every commit
-experiments/      # Benchmarking scripts (not part of package)
-```
-
-## Quickstart
-
-```bash
-git clone https://github.com/your-org/qdot-agent
-cd qdot-agent
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest tests/
-```
-
-## Phase status
-
-| Phase | Focus | Status |
-|-------|-------|--------|
-| 0 | Foundation: types, state, governance, HITL, safety, CIM simulator | ✅ Complete |
-| 1 | Perception: DQC gatekeeper, TinyCNN classifier, OOD detector | 🔲 Next |
-| 2 | Planning: POMDP belief, active sensing, BO, backtracking state machine | 🔲 Planned |
-| 3 | Sim-to-real: disorder learner, hardware adapter | 🔲 Planned |
-| 4 | Meta-learning, ablation study, paper | 🔲 Planned |
-
-## Design principles
-
-1. **One executive, clear chain of command.** No competing decision-makers.
-2. **Physics first.** CIM is embedded in the planner's belief state, not bolted on.
-3. **Uncertainty is a first-class citizen.** Every prediction carries confidence.
-4. **Hardware agnosticism by contract.** Swapping device types requires zero changes above Layer 4.
-5. **HITL is a genuine gate.** Auto-approval on timeout is removed.
-
-## Development workflow
-
-```bash
-# One branch per phase
-git checkout -b phase-1-perception
-
-# Run safety fuzz before every commit
-python -m pytest tests/test_safety.py -v
-
-# Merge when phase is working + tested
-git checkout main && git merge phase-1-perception
-```
+### Links
+- GitHub: https://github.com/k1151msarandega/Agentic-Semiconductor-Quantum-Device-Tuning
+- AMD Developer Hackathon: https://lablab.ai/ai-hackathons/amd-developer
