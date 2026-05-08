@@ -47,7 +47,7 @@ if ! command -v conda &> /dev/null; then
     exit 1
 fi
 
-eval "$(conda shell.bash hook)"
+source /root/miniconda3/etc/profile.d/conda.sh
 
 # ----------------------------------------------------------------------------
 # 3. Accept Anaconda TOS automatically
@@ -76,8 +76,7 @@ echo "► Ensuring dependencies are installed..."
 
 pip install --upgrade pip
 
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.1
-pip install vllm streamlit plotly openai
+pip install streamlit plotly openai
 
 echo "  ✓ Dependencies ready"
 
@@ -110,31 +109,15 @@ done
 # ----------------------------------------------------------------------------
 # 8. Start vLLM
 # ----------------------------------------------------------------------------
-echo "► Starting vLLM ($MODEL) on port $VLLM_PORT..."
-nohup vllm serve \
-    --model "$MODEL" \
-    --port "$VLLM_PORT" \
-    --gpu-memory-utilization 0.8 \
-    > /tmp/vllm.log 2>&1 &
-
-VLLM_PID=$!
-echo "  vLLM PID: $VLLM_PID (logs: tail -f /tmp/vllm.log)"
-
-# Wait for vLLM to come online
-echo -n "► Waiting for vLLM to be ready..."
-for i in {1..60}; do
-    if curl -s http://localhost:$VLLM_PORT/v1/models > /dev/null; then
-        echo " ✓ vLLM is online"
-        break
-    fi
-    echo -n "."
-    sleep 1
-done
-
-if ! curl -s http://localhost:$VLLM_PORT/v1/models > /dev/null; then
-    echo ""
-    echo "✗ vLLM failed to start. Check logs:"
-    echo "  tail -f /tmp/vllm.log"
+echo "► Checking vLLM..."
+if curl -s http://localhost:8000/v1/models > /dev/null 2>&1; then
+    echo "  ✓ vLLM already running on port 8000"
+else
+    echo "  ✗ vLLM not running. Start it manually:"
+    echo "    conda deactivate"
+    echo "    vllm serve Qwen/Qwen2.5-1.5B-Instruct --host 0.0.0.0 --port 8000 &"
+    echo "  Then re-run deploy.sh"
+    exit 1
 fi
 
 # ----------------------------------------------------------------------------
