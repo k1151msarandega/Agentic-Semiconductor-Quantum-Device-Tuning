@@ -47,20 +47,25 @@ pip install streamlit plotly openai
 echo "  ✓ Dependencies ready"
 
 # ----------------------------------------------------------------------------
-# 5. Check vLLM status (Claude Fix #3)
+# 5. Start vLLM if not already running
 # ----------------------------------------------------------------------------
 echo "► Checking vLLM..."
 if curl -s http://localhost:$VLLM_PORT/v1/models > /dev/null 2>&1; then
     echo "  ✓ vLLM already running on port $VLLM_PORT"
 else
-    echo "  ✗ vLLM not running."
-    echo "  Start it manually (outside conda):"
-    echo ""
-    echo "      conda deactivate"
-    echo "      vllm serve $MODEL --host 0.0.0.0 --port $VLLM_PORT &"
-    echo ""
-    echo "  Then re-run: bash deploy.sh"
-    exit 1
+    echo "  Starting vLLM..."
+    conda deactivate
+    nohup vllm serve $MODEL \
+        --host 0.0.0.0 --port $VLLM_PORT \
+        --gpu-memory-utilization 0.4 \
+        > /tmp/vllm.log 2>&1 &
+    source /root/miniconda3/etc/profile.d/conda.sh
+    conda activate "$CONDA_ENV"
+    echo -n "  Waiting for vLLM..."
+    for i in $(seq 1 90); do
+        curl -s http://localhost:$VLLM_PORT/v1/models > /dev/null 2>&1 && echo " ✓" && break
+        printf "."; sleep 1
+    done
 fi
 
 # ----------------------------------------------------------------------------
