@@ -2,14 +2,16 @@
 app.py  —  SimQuantum Tuning Lab
 =================================
 AMD Developer Hackathon 2026.
-Or locally (LLM offline, physics sim still runs):
-    streamlit run app.py
 
 Before running, set env vars (on MI300X):
-"""
+
     export QDOT_LLM_BASE_URL=http://localhost:8000/v1
     export QDOT_LLM_MODEL=Qwen/Qwen2.5-1.5B-Instruct
     streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+
+    Or locally (LLM offline, physics sim still runs):
+    streamlit run app.py
+"""
 
 from __future__ import annotations
 import os, sys, threading, time, re
@@ -762,7 +764,7 @@ with tl:
     st.markdown(
         '<div class="topbar"><div>'
         '<div class="topbar-title">⚛ SimQuantum Tuning Lab</div>'
-        '<div class="topbar-sub">Autonomous quantum dot tuning · AMD Developer Hackathon 2025</div>'
+        '<div class="topbar-sub">Autonomous quantum dot tuning · AMD Developer Hackathon 2026 · Kudzai Musarandega</div>'
         '</div></div>', unsafe_allow_html=True)
 with tr:
     b = ('<span class="badge badge-live">● LIVE</span>' if running
