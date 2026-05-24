@@ -81,11 +81,11 @@ class ExperimentState:
     current_voltage: VoltagePoint = field(default_factory=lambda: VoltagePoint(0.0, 0.0))
     trajectory: List[VoltagePoint] = field(default_factory=list)
 
-    # DEFAULT BOUNDS WIDENED TO ±3.0 V (was ±1.0 V).
-    # Rationale: GaAs-class devices with E_c ≈ 2–3 meV and lever_arm ≈ 0.65–0.85
-    # place the first charge transition at -1.5 to -2.5 V.  The old ±1.0 V
-    # constraint was an arbitrary hackathon placeholder that made the benchmark
-    # unsolvable by construction.  Override per device class via ExperimentState.new().
+    # DEFAULT BOUNDS: ±8.0 V.
+    # Rationale: benchmark uses E_c ≈ 2.5 meV and lever_arm ≈ 0.65, placing
+    # the first charge transition at V_t ≈ -3.85 V. ±8 V provides margin
+    # on both sides and covers the full GaAs/Si-SiGe parameter space used
+    # in the benchmark. Override per device class via ExperimentState.new().
     voltage_bounds: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
         "vg1": {"min": -8.0, "max": 8.0},
         "vg2": {"min": -8.0, "max": 8.0},
