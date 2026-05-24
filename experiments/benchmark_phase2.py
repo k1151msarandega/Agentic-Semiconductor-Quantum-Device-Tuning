@@ -189,13 +189,13 @@ def run_trial(
         "trial_idx": trial_idx,
     }
 
-    # CIM parameters constrained so the charge transition is within ±3 V.
-    # Transition voltage: V_t = -E_c / lever_arm.
-    # With lever_arm ~ 0.65 and E_c ~ 1.5 meV:
-    #   V_t ≈ -2.3 V  (range: -1.8 to -2.8 V across the ± perturbations)
-    # This matches GaAs-class device physics and is reachable within the
-    # ±3 V voltage bounds set in ExperimentState (state.py).
-    E_c_base = 2.5 + np.random.uniform(-0.3, 0.3)   # was 1.5, lever_arm stays 0.65
+    # CIM parameters: E_c = 2.5 meV (high-end GaAs / Si/SiGe class).
+    # Transition voltage: V_t = -E_c / lever_arm = -2.5 / 0.65 ≈ -3.85 V.
+    # Reachable within the ±8 V bounds in ExperimentState.
+    # The COARSE_SURVEY 32×32 scan over the full ±8 V range resolves the
+    # transition at pixel ≈ 8/32, which is visible. CHARGE_ID then jumps
+    # the agent to the survey peak before BO navigation begins.
+    E_c_base = 2.5 + np.random.uniform(-0.3, 0.3)
     t_c_base = 0.3 + np.random.uniform(-0.1, 0.1)
     adapter = CIMSimulatorAdapter(
         device_id=device_id,
