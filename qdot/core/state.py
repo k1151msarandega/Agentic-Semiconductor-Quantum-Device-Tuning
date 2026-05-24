@@ -45,7 +45,7 @@ class BeliefState:
         "E_c2": 0.55,
         "t_c": 0.05,
         "T": 0.015,
-        "lever_arm": 1.0,
+        "lever_arm": 0.65,   # must match CIMSimulatorAdapter.DEFAULT_PARAMS
         "noise_level": 0.01,
     })
     disorder_estimate: Optional[Dict[str, Any]] = None
