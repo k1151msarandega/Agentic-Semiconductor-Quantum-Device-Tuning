@@ -163,6 +163,10 @@ def main():
         print(f"QFlow accuracy:     {qflow_acc:.4f}  (target ≥0.96)")
         print(f"QFlow OOD recall:   {qflow_ood_recall:.4f}  (target =1.00 — all real data is OOD)")
 
+    # See where errors concentrate
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(all_labels, all_preds)
+    print(cm)
     # -----------------------------------------------------------------------
     # 5. Save training log
     # -----------------------------------------------------------------------
