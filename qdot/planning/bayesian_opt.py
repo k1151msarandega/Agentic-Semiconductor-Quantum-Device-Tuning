@@ -157,10 +157,15 @@ class MultiResBO:
              min(vg2_bounds["max"], current.vg2 + l1_max / 2)),
         ]
 
+        # In the featureless MISC zone the GP has no signal to exploit —
+        # boosting β forces it to explore, rather than staying pinned near
+        # the current voltage where the posterior mean is flattest.
+        effective_beta = self.exploration_weight * 4.0 if exploration_override else self.exploration_weight
+
         # Maximise UCB acquisition via L-BFGS-B
         def neg_ucb(xy: np.ndarray) -> float:
             mu, var = self.gp.predict(xy[0], xy[1])
-            return -(mu + self.exploration_weight * np.sqrt(var))
+            return -(mu + effective_beta * np.sqrt(var))
 
         x0 = np.array([current.vg1, current.vg2])
         result = minimize(neg_ucb, x0, method="L-BFGS-B", bounds=search_bounds)
