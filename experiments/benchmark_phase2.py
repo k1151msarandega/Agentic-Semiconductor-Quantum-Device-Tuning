@@ -210,6 +210,20 @@ def run_trial(
         seed=trial_idx + 1000,
     )
 
+    # Sync actual device parameters into the belief state so the GP prior
+    # and particle filter observation model match the device being tuned.
+    # Without this, BeliefUpdater and MultiResBO._update_gp_prior() operate
+    # on the BeliefState defaults (E_c1=0.50, E_c2=0.55, lever_arm=1.0),
+    # which describe a physically different device than the one in the adapter.
+    state.belief.device_params = {
+        "E_c1":        adapter.device.E_c1,
+        "E_c2":        adapter.device.E_c2,
+        "t_c":         adapter.device.t_c,
+        "T":           adapter.device.T,
+        "lever_arm":   adapter.device.lever_arm,
+        "noise_level": adapter.device.noise_level,
+    }
+    
     # HITL in auto-approve test mode (no blocking)
     hitl = HITLManager(enabled=True)
     hitl.set_test_mode(auto_outcome=HITLOutcome.APPROVED)
