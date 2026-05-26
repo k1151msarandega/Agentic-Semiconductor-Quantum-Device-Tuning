@@ -457,9 +457,31 @@ class ExecutiveAgent:
     def _run_navigation(self) -> StageResult:
         self.bo.update(self.state.bo_history)
 
+        # Dynamic step size and exploration scaling from OOD score.
+        # High OOD score → deep in the featureless MISC zone → take large
+        # exploratory leaps. Low OOD score → near a recognisable charge
+        # boundary → fine-grained exploitative steps.
+        base_l1_max = self.state.step_caps.get("l1_max", 0.10)
+        if self.state.last_ood is not None:
+            ood_score = self.state.last_ood.score
+            ood_threshold = self.state.last_ood.threshold  # calibrated 95th-pct value
+            # Normalised ratio: 0 = in-distribution, 1 = at threshold, >1 = OOD
+            ood_ratio = min(ood_score / (ood_threshold + 1e-8), 3.0)
+        else:
+            ood_ratio = 0.0
+
+        # Step size scales linearly from base (in-distribution) to 7× base (3× threshold).
+        # Hard cap at 1.0V to stay within typical device voltage ranges.
+        dynamic_l1_max = min(base_l1_max * (1.0 + 2.0 * ood_ratio), 1.0)
+
+        # When OOD ratio > 1.5 (well past the threshold), also boost UCB β
+        # in the BO so it doesn't just exploit the flat GP mean near current voltage.
+        exploration_override = ood_ratio > 1.5
+
         proposal = self.bo.propose(
             current=self.state.current_voltage,
-            l1_max=self.state.step_caps.get("l1_max", 0.10),
+            l1_max=dynamic_l1_max,
+            exploration_override=exploration_override,
         )
 
         proposal = self.safety_critic.clip(proposal, self.state.current_voltage)
