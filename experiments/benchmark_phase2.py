@@ -220,7 +220,7 @@ def run_trial(
         "E_c2":        adapter.device.E_c2,
         "t_c":         adapter.device.t_c,
         "T":           adapter.device.T,
-        "lever_arm":   adapter.device.lever_arm,
+        "lever_arm":   adapter.device.alpha,
         "noise_level": adapter.device.noise_level,
     }
     
