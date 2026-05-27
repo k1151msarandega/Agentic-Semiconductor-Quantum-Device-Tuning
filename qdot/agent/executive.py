@@ -454,6 +454,51 @@ class ExecutiveAgent:
             confidence=classification.confidence,
             physics_override=classification.physics_override,
         )
+    
+    def _compute_11_target(self) -> Optional[VoltagePoint]:
+    """
+    Numerically compute the centre of the (1,1) ground-state region within
+    the voltage bounds using the belief state's device parameters.
+
+    Returns the centroid VoltagePoint, or None if the (1,1) region does not
+    fall within the current voltage bounds (e.g. params place it out of range).
+    """
+    from qdot.simulator.cim import ConstantInteractionDevice
+    params = self.state.belief.device_params
+    if not params:
+        return None
+
+    tmp = ConstantInteractionDevice(
+        E_c1=params.get("E_c1", 0.5),
+        E_c2=params.get("E_c2", 0.55),
+        t_c=params.get("t_c", 0.05),
+        T=params.get("T", 0.015),
+        lever_arm=params.get("lever_arm", 1.0),
+        noise_level=0.0,
+    )
+
+    v1_min = self.state.voltage_bounds["vg1"]["min"]
+    v1_max = self.state.voltage_bounds["vg1"]["max"]
+    v2_min = self.state.voltage_bounds["vg2"]["min"]
+    v2_max = self.state.voltage_bounds["vg2"]["max"]
+
+    v1_grid = np.linspace(v1_min, v1_max, 60)
+    v2_grid = np.linspace(v2_min, v2_max, 60)
+    all_states = [(n1, n2) for n1 in range(3) for n2 in range(3)]
+
+    v1_11, v2_11 = [], []
+    for v2 in v2_grid:
+        for v1 in v1_grid:
+            energies = [tmp.ground_state_energy(float(v1), float(v2), n1, n2)
+                        for n1, n2 in all_states]
+            if all_states[int(np.argmin(energies))] == (1, 1):
+                v1_11.append(float(v1))
+                v2_11.append(float(v2))
+
+    if not v1_11:
+        return None
+    return VoltagePoint(vg1=float(np.mean(v1_11)), vg2=float(np.mean(v2_11)))
+    
     def _run_navigation(self) -> StageResult:
         self.bo.update(self.state.bo_history)
 
