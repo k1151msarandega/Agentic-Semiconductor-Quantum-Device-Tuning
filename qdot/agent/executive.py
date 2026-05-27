@@ -500,6 +500,29 @@ class ExecutiveAgent:
     return VoltagePoint(vg1=float(np.mean(v1_11)), vg2=float(np.mean(v2_11)))
     
     def _run_navigation(self) -> StageResult:
+        # On the very first navigation step the BO history is empty and the GP
+        # has no posterior — any proposal is effectively random. Instead, use
+        # the CIM free-energy to compute the (1,1) ground-state centroid and
+        # jump directly there. All subsequent steps use the BO normally.
+        if len(self.state.bo_history) == 0:
+            target_11 = self._compute_11_target()
+            if target_11 is not None:
+                # Clamp individual-axis jump to ±3.0V to respect hardware limits.
+                max_jump = 3.0
+                dv1 = float(np.clip(
+                    target_11.vg1 - self.state.current_voltage.vg1,
+                    -max_jump, max_jump
+                ))
+                dv2 = float(np.clip(
+                    target_11.vg2 - self.state.current_voltage.vg2,
+                    -max_jump, max_jump
+                ))
+                self.translator.execute_voltage_move(
+                    vg1=self.state.current_voltage.vg1 + dv1,
+                    vg2=self.state.current_voltage.vg2 + dv2,
+                )
+                self.state.apply_move(VoltagePoint(vg1=dv1, vg2=dv2))
+
         self.bo.update(self.state.bo_history)
 
         # Dynamic step size and exploration scaling from OOD score.
