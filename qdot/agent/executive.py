@@ -616,11 +616,18 @@ class ExecutiveAgent:
         # blindly and the convergence check always fails.
         nav_v1 = self.state.current_voltage.vg1
         nav_v2 = self.state.current_voltage.vg2
+        # Window must be large enough for the CNN to see honeycomb structure.
+        # ±1.5V covers at least one full Coulomb period for all benchmark params
+        # and matches the training data scale. 16×16 = 256 pts per step.
+        nav_v1_lo = max(self.state.voltage_bounds["vg1"]["min"], nav_v1 - 1.5)
+        nav_v1_hi = min(self.state.voltage_bounds["vg1"]["max"], nav_v1 + 1.5)
+        nav_v2_lo = max(self.state.voltage_bounds["vg2"]["min"], nav_v2 - 1.5)
+        nav_v2_hi = min(self.state.voltage_bounds["vg2"]["max"], nav_v2 + 1.5)
         nav_plan = MeasurementPlan(
             modality=MeasurementModality.COARSE_2D,
-            v1_range=(nav_v1 - 0.15, nav_v1 + 0.15),
-            v2_range=(nav_v2 - 0.15, nav_v2 + 0.15),
-            resolution=8,    # was 16. 64 pts per nav step instead of 256; allows 20 steps within budget
+            v1_range=(nav_v1_lo, nav_v1_hi),
+            v2_range=(nav_v2_lo, nav_v2_hi),
+            resolution=16,
             rationale="NAVIGATION: local scan to update belief state after voltage move",
         )
         nav_plan = self._fit_plan_to_remaining_budget(nav_plan)
