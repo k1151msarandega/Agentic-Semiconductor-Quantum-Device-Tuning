@@ -135,7 +135,7 @@ class MultiResBO:
         self._update_gp_prior()
         self.gp.fit(bo_history)
 
-    def propose(self, current: VoltagePoint, l1_max: float = 0.10) -> ActionProposal:
+    def propose(self, current: VoltagePoint, l1_max: float = 0.10, exploration_override: bool = False) -> ActionProposal:
         """
         Propose a voltage move using UCB acquisition.
 
