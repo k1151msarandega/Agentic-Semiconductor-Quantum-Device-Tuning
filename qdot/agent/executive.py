@@ -643,6 +643,21 @@ class ExecutiveAgent:
                     self.state.add_classification(nav_cls)
                     self.state.add_ood_result(nav_ood)
                     self.belief_updater.update_from_2d(nav_m, nav_cls)
+
+                    # Record this observation in bo_history so the GP can learn.
+                    # Score = P(1,1) from the updated belief — this is the quantity
+                    # the BO is implicitly maximising. Without this the GP always
+                    # fits to an empty history and every proposal is from the prior.
+                    bo_score = self.state.belief.charge_probs.get((1, 1), 0.0)
+                    bo_pt = self.bo.make_bo_point(
+                        voltage=self.state.current_voltage,
+                        score=bo_score,
+                        label=nav_cls.label,
+                        confidence=nav_cls.confidence,
+                        step=self.control_steps,
+                    )
+                    self.state.bo_history.append(bo_pt)
+
                     if nav_ood.score > 8.0:
                         self.narrator.report_exception(
                             stage="NAVIGATION",
