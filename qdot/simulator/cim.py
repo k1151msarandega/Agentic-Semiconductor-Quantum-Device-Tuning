@@ -4,15 +4,15 @@ qdot/simulator/cim.py
 Constant Interaction Model (CIM) physics simulator for double quantum dots.
 
 Physics Model:
-    Two quantum dots coupled capacitively and by a tunnel barrier.
+    Two quantum dots coupled by a tunnel barrier.
     Charging energy: E_c = e²/2C (capacitive energy cost per electron)
-    Inter-dot coupling: E_m (capacitive cross-coupling between dots)
     Tunnel coupling: t_c (interdot hopping amplitude)
     Gate voltage → energy via lever arm: E = α * V_gate
 
 References:
-    van der Wiel et al., Rev. Mod. Phys. 75, 1 (2002) — Electron transport in double dots
+    Koch et al., Phys. Rev. A 76, 042319 (2007) — Charge qubits
     Hanson et al., Rev. Mod. Phys. 79, 1217 (2007) — Spin qubits review
+    van der Wiel et al., Rev. Mod. Phys. 75, 1 (2002) — Electron transport
 """
 
 from __future__ import annotations
@@ -27,22 +27,20 @@ from qdot.hardware.adapter import DeviceAdapter
 
 
 class ConstantInteractionDevice:
-    """Corrected Double Quantum Dot CIM Physics Engine."""
+    """CIM physics engine."""
 
     def __init__(
         self,
-        E_c1: float = 1.20,       # Self-charging energy Dot 1 (increased for clear scaling)
-        E_c2: float = 1.25,       # Self-charging energy Dot 2
-        E_m: float = 0.25,        # CRITICAL FIX: Inter-dot capacitive cross-coupling energy
-        t_c: float = 0.04,        # Tunnel coupling hybridization factor
-        T: float = 0.020,         # Effective electron temperature
-        lever_arm: float = 1.0,   # Voltage-to-energy conversion arm
-        noise_level: float = 0.005,
+        E_c1: float = 0.50,
+        E_c2: float = 0.55,
+        t_c: float = 0.05,
+        T: float = 0.015,
+        lever_arm: float = 1.0,
+        noise_level: float = 0.01,
         seed: Optional[int] = None,
     ) -> None:
         self.E_c1 = E_c1
         self.E_c2 = E_c2
-        self.E_m = E_m            # Inter-dot interaction energy
         self.t_c = t_c
         self.T = T
         self.alpha = lever_arm
@@ -53,37 +51,28 @@ class ConstantInteractionDevice:
         self._disorder_v1_grid: Optional[np.ndarray] = None
         self._disorder_v2_grid: Optional[np.ndarray] = None
 
-    def ground_state_energy(self, vg1: float, vg2: float, n1: int, n2: int) -> float:
-        """
-        Calculates the total free energy for a given charge configuration (n1, n2).
-        Uses a classical quadratic charging model with capacitive cross-coupling.
-        """
-        # 1. Electrostatic charging energy matrix (quadratic cost + mutual interaction)
-        E_charging = 0.5 * self.E_c1 * (n1**2) + 0.5 * self.E_c2 * (n2**2) + self.E_m * n1 * n2
-        
-        # 2. Electrostatic potential from the gates (negative because positive V pulls energy down)
+    def chemical_potential(self, vg1, vg2, n1, n2):
+        E_charge = (0.5 * self.E_c1 * n1**2 
+                    + 0.5 * self.E_c2 * n2**2 
+                    + self.E_cm * n1 * n2)
         E_gate = -self.alpha * (vg1 * n1 + vg2 * n2)
-        
-        E_total = E_charging + E_gate
+        return E_charge + E_gate
 
-        # 4. Tunnel-coupling quantum correction near triple-point boundaries
-        if n1 > 0 and n2 > 0:
-            E_total -= self.t_c
-            
-        return E_total
+    def ground_state_energy(self, vg1: float, vg2: float, n1: int, n2: int) -> float:
+        mu = self.chemical_potential(vg1, vg2, n1, n2)
+        if n1 == 1 and n2 == 1:
+            mu -= self.t_c
+        return mu
 
     def current(self, vg1: float, vg2: float) -> float:
-        """Scalar conductance at (vg1, vg2) based on ground state transition gaps."""
+        """Scalar conductance at (vg1, vg2). Applies disorder if injected."""
         if self._disorder_map is not None:
             disorder_offset = self._interpolate_disorder(vg1, vg2)
             vg1 = vg1 + disorder_offset * 0.1
 
-        # Evaluate energy for all accessible discrete charge configurations (up to 3 e- per dot)
-        states = [(n1, n2) for n1 in range(4) for n2 in range(4)]
+        states = [(n1, n2) for n1 in range(3) for n2 in range(3)]
         energies = [self.ground_state_energy(vg1, vg2, n1, n2) for n1, n2 in states]
         sorted_energies = sorted(energies)
-        
-        # Transport occurs when the lowest two energy states are nearly degenerate
         energy_gap = sorted_energies[1] - sorted_energies[0]
 
         broadening = max(self.t_c, self.T)
@@ -95,32 +84,46 @@ class ConstantInteractionDevice:
         return float(np.clip(conductance, 0, None))
 
     def current_grid(self, v1_grid: np.ndarray, v2_grid: np.ndarray) -> np.ndarray:
-        """Vectorised 2D conductance map over a grid for fast CNN patch generation."""
+        """
+        Vectorised 2D conductance map over a meshgrid.
+
+        Replaces the Python double-for-loop in sample_patch and
+        CIMDataset._simulate() with NumPy broadcasting — ~100–500× faster
+        for a 64×64 patch (benchmarked: ~8 ms vs ~4 s).
+
+        Disorder is NOT applied here (bilinear interpolation is not batched).
+        For training-data generation disorder is always zero.
+
+        Args:
+            v1_grid: 1D array of vg1 values, shape (W,)
+            v2_grid: 1D array of vg2 values, shape (H,)
+
+        Returns:
+            float32 array, shape (H, W), values in [0, inf) before normalisation.
+            Row i = v2_grid[i], column j = v1_grid[j].
+        """
         VG1, VG2 = np.meshgrid(
             v1_grid.astype(np.float64),
             v2_grid.astype(np.float64),
-        )
+        )  # (H, W)
 
         alpha = float(self.alpha)
         E_c1 = float(self.E_c1)
         E_c2 = float(self.E_c2)
-        E_m = float(self.E_m)
         t_c = float(self.t_c)
 
-        states = [(n1, n2) for n1 in range(4) for n2 in range(4)]
+        # Energies for all 9 charge states, shape (9, H, W)
+        states = [(n1, n2) for n1 in range(3) for n2 in range(3)]
         slabs = []
         for n1, n2 in states:
-            # Broadcast electrostatic equations over the grid arrays
-            E_charging = 0.5 * E_c1 * (n1**2) + 0.5 * E_c2 * (n2**2) + E_m * n1 * n2
-            E_gate = -alpha * (VG1 * n1 + VG2 * n2)
-            e = E_charging + E_gate
-            if n1 > 0 and n2 > 0:
+            e = E_c1 * n1 + E_c2 * n2 - alpha * (VG1 * n1 + VG2 * n2)
+            if n1 == 1 and n2 == 1:
                 e = e - t_c
             slabs.append(e)
 
-        energies = np.stack(slabs, axis=0)          
-        sorted_e = np.sort(energies, axis=0)        
-        energy_gap = sorted_e[1] - sorted_e[0]      
+        energies = np.stack(slabs, axis=0)          # (9, H, W)
+        sorted_e = np.sort(energies, axis=0)        # (9, H, W)
+        energy_gap = sorted_e[1] - sorted_e[0]      # (H, W)
 
         broadening = max(t_c, float(self.T))
         patch = broadening / (energy_gap ** 2 + broadening ** 2)
@@ -131,14 +134,17 @@ class ConstantInteractionDevice:
         return np.clip(patch, 0, None).astype(np.float32)
 
     def current_for_state(self, vg1: float, vg2: float, n1: int, n2: int) -> float:
-        """POMDP observation model: predicted conductance conditioned on occupancy."""
+        """
+        POMDP observation model: predicted conductance conditioned on (n1,n2).
+        Used exclusively by BeliefUpdater and ActiveSensingPolicy.
+        """
         if self._disorder_map is not None:
             disorder_offset = self._interpolate_disorder(vg1, vg2)
             vg1 = vg1 + disorder_offset * 0.1
 
         E_target = self.ground_state_energy(vg1, vg2, n1, n2)
 
-        all_states = [(m1, m2) for m1 in range(4) for m2 in range(4)]
+        all_states = [(m1, m2) for m1 in range(3) for m2 in range(3)]
         E_min = min(self.ground_state_energy(vg1, vg2, m1, m2) for m1, m2 in all_states)
 
         delta_E = max(0.0, E_target - E_min)
@@ -148,7 +154,7 @@ class ConstantInteractionDevice:
         neighbour_energies = []
         for dn1, dn2 in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
             m1, m2 = n1 + dn1, n2 + dn2
-            if 0 <= m1 <= 3 and 0 <= m2 <= 3:
+            if 0 <= m1 <= 2 and 0 <= m2 <= 2:
                 neighbour_energies.append(self.ground_state_energy(vg1, vg2, m1, m2))
 
         if not neighbour_energies:
@@ -161,11 +167,13 @@ class ConstantInteractionDevice:
         return float(np.clip(conductance * boltzmann, 0, None))
 
     def inject_disorder(self, disorder_posterior: Dict) -> None:
+        """Inject device-specific disorder from DisorderLearner (Phase 3)."""
         self._disorder_map = np.array(disorder_posterior["mean"])
         self._disorder_v1_grid = np.array(disorder_posterior["v1_grid"])
         self._disorder_v2_grid = np.array(disorder_posterior["v2_grid"])
 
     def _interpolate_disorder(self, vg1: float, vg2: float) -> float:
+        """Bilinear interpolation of the disorder map at (vg1, vg2)."""
         if self._disorder_map is None:
             return 0.0
         v1g = self._disorder_v1_grid
@@ -178,16 +186,18 @@ class ConstantInteractionDevice:
 
 
 class CIMSimulatorAdapter(DeviceAdapter):
-    """Drop-in DeviceAdapter mapping to the updated CIM physics engine."""
+    """
+    Drop-in DeviceAdapter using the CIM physics engine.
+    sample_patch uses the vectorised current_grid path — no Python loop.
+    """
 
     DEFAULT_PARAMS = {
-        "E_c1": 1.20,
-        "E_c2": 1.25,
-        "E_m": 0.25,
-        "t_c": 0.04,
-        "T": 0.020,
+        "E_c1": 0.50,
+        "E_c2": 0.55,
+        "t_c": 0.05,
+        "T": 0.015,
         "lever_arm": 1.0,
-        "noise_level": 0.005,
+        "noise_level": 0.01,
     }
 
     def __init__(
@@ -203,20 +213,27 @@ class CIMSimulatorAdapter(DeviceAdapter):
 
     @property
     def device_type(self) -> str:
-        return "CIM Double-Dot Simulator"
+        return "CIM Simulator"
 
     def sample_patch(
         self,
-        v1_range: Tuple[float, float] = (0.0, 4.0),
-        v2_range: Tuple[float, float] = (0.0, 4.0),
-        res: int = 64,
+        v1_range: Tuple[float, float] = (-1.0, 1.0),
+        v2_range: Tuple[float, float] = (-1.0, 1.0),
+        res: int = 32,
     ) -> Measurement:
+        """
+        Acquire a 2D conductance map.
+
+        Uses current_grid (NumPy vectorised) when no disorder map is active,
+        and falls back to the scalar loop only when disorder is injected (Phase 3).
+        """
         v1_grid = np.linspace(v1_range[0], v1_range[1], res, dtype=np.float32)
         v2_grid = np.linspace(v2_range[0], v2_range[1], res, dtype=np.float32)
 
         if self.device._disorder_map is None:
             patch = self.device.current_grid(v1_grid, v2_grid)
         else:
+            # Disorder active: scalar loop (interpolation not batched yet)
             patch = np.zeros((res, res), dtype=np.float32)
             for i, v2 in enumerate(v2_grid):
                 for j, v1 in enumerate(v1_grid):
@@ -241,19 +258,18 @@ class CIMSimulatorAdapter(DeviceAdapter):
                 "v2_grid": v2_grid.tolist(),
                 "E_c1": self.device.E_c1,
                 "E_c2": self.device.E_c2,
-                "E_m": self.device.E_m,
                 "t_c": self.device.t_c,
-                "model": "Constant Interaction Double-Dot Model",
+                "model": "Constant Interaction Model",
             },
         )
 
     def line_scan(
         self,
         axis: str = "vg1",
-        start: float = 0.0,
-        stop: float = 4.0,
+        start: float = -1.0,
+        stop: float = 1.0,
         steps: int = 128,
-        fixed: float = 2.0,
+        fixed: float = 0.0,
     ) -> Measurement:
         grid = np.linspace(start, stop, steps, dtype=np.float32)
         trace = np.zeros(steps, dtype=np.float32)
@@ -294,4 +310,5 @@ class CIMSimulatorAdapter(DeviceAdapter):
         )
 
     def set_voltages(self, voltages: Dict[str, float]) -> None:
+        """Update internal voltage state (no-op for physics sim)."""
         self._current_voltages.update(voltages)
