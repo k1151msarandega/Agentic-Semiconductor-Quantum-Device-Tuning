@@ -113,10 +113,14 @@ class ConstantInteractionDevice:
         t_c = float(self.t_c)
 
         # Energies for all 9 charge states, shape (9, H, W)
+        E_m = getattr(self, 'E_cm', 0.0)   # mutual charging energy; 0 = no cross-cap
         states = [(n1, n2) for n1 in range(3) for n2 in range(3)]
         slabs = []
         for n1, n2 in states:
-            e = E_c1 * n1 + E_c2 * n2 - alpha * (VG1 * n1 + VG2 * n2)
+            e = (0.5 * E_c1 * n1**2
+                 + 0.5 * E_c2 * n2**2
+                 + E_m * n1 * n2
+                 - alpha * (VG1 * n1 + VG2 * n2))
             if n1 == 1 and n2 == 1:
                 e = e - t_c
             slabs.append(e)
