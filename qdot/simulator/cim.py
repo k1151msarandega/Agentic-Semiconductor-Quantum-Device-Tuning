@@ -44,6 +44,7 @@ class ConstantInteractionDevice:
         self.t_c = t_c
         self.T = T
         self.alpha = lever_arm
+        self.E_cm = 0.0   # mutual capacitance cross-term; set >0 for honeycomb skew
         self.noise_level = noise_level
         self.rng = np.random.default_rng(seed)
 
