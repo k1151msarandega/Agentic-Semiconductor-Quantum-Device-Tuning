@@ -616,13 +616,22 @@ class ExecutiveAgent:
         # blindly and the convergence check always fails.
         nav_v1 = self.state.current_voltage.vg1
         nav_v2 = self.state.current_voltage.vg2
-        # Window must be large enough for the CNN to see honeycomb structure.
-        # ±1.5V covers at least one full Coulomb period for all benchmark params
-        # and matches the training data scale. 16×16 = 256 pts per step.
-        nav_v1_lo = max(self.state.voltage_bounds["vg1"]["min"], nav_v1 - 1.5)
-        nav_v1_hi = min(self.state.voltage_bounds["vg1"]["max"], nav_v1 + 1.5)
-        nav_v2_lo = max(self.state.voltage_bounds["vg2"]["min"], nav_v2 - 1.5)
-        nav_v2_hi = min(self.state.voltage_bounds["vg2"]["max"], nav_v2 + 1.5)
+        # Scale nav scan to the Coulomb period so the CNN always receives
+        # an image consistent with its training distribution.
+        # Training scans span ~1.5 × (2 E_c / lever_arm); we use 0.75 × period
+        # (half of that) as the half-width so the window covers one full cell.
+        _params = self.state.belief.device_params
+        if _params:
+            _E_c = ((_params.get("E_c1", 1.0) + _params.get("E_c2", 1.0)) / 2.0)
+            _lever = max(_params.get("lever_arm", 1.0), 0.1)
+            _period = 2.0 * _E_c / _lever          # one Coulomb period in volts
+            nav_half_width = float(np.clip(_period / 2.0, 1.5, 5.0))
+        else:
+            nav_half_width = 1.5
+        nav_v1_lo = max(self.state.voltage_bounds["vg1"]["min"], nav_v1 - nav_half_width)
+        nav_v1_hi = min(self.state.voltage_bounds["vg1"]["max"], nav_v1 + nav_half_width)
+        nav_v2_lo = max(self.state.voltage_bounds["vg2"]["min"], nav_v2 - nav_half_width)
+        nav_v2_hi = min(self.state.voltage_bounds["vg2"]["max"], nav_v2 + nav_half_width)
         nav_plan = MeasurementPlan(
             modality=MeasurementModality.COARSE_2D,
             v1_range=(nav_v1_lo, nav_v1_hi),
