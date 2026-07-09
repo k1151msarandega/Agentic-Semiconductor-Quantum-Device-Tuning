@@ -23,6 +23,8 @@ import numpy as np
 
 from qdot.core.types import ChargeLabel, Measurement, MeasurementModality, VoltagePoint
 
+from qdot.simulator.physics import coulomb_window, coulomb_centre
+
 
 @dataclass
 class DatasetConfig:
@@ -182,10 +184,10 @@ class CIMDataset:
             seed=int(self.rng.integers(0, 2**31)),
         )
 
-        E_c_mean = (float(E_c1) + float(E_c2)) / 2.0
-        V_centre = -E_c_mean / float(lever)
-        coulomb_period_V = E_c_mean / float(lever)
-        delta = max(1.5 * coulomb_period_V, 0.5)   # at least ±0.5 V
+        V_centre = coulomb_centre(E_c1, E_c2, lever)
+        delta, coulomb_period_V = coulomb_window(
+            E_c1, E_c2, lever, factor=1.5, min_half_width=0.5
+        )
 
         v1_grid = np.linspace(V_centre - delta, V_centre + delta, res, dtype=np.float32)
         v2_grid = np.linspace(V_centre - delta, V_centre + delta, res, dtype=np.float32)
