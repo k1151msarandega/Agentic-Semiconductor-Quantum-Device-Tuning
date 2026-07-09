@@ -45,6 +45,8 @@ from qdot.planning.state_machine import (
 from qdot.agent.translator import TranslationAgent
 from qdot.agent.narrator import LLMNarrator
 
+from qdot.simulator.physics import coulomb_window
+
 class ExecutiveAgent:
     def __init__(
         self,
@@ -386,15 +388,20 @@ class ExecutiveAgent:
             "survey_peak_vg2", self.state.current_voltage.vg2
         )
 
-        # Always use a wide window centred on the refined peak from
-        # HYPERSURFACE_SEARCH.  The CNN was trained on windows of
-        # ±(1.5 × coulomb_period) ≈ ±3–24 V half-width.  The old
-        # ±0.2 V "high-resolution local scan" was 17× narrower than
-        # the minimum training window — the CNN classified every such
-        # patch as MISC.  ±2.0 V covers at least one full Coulomb
-        # period for all benchmark params (E_c ≤ 1.8, lever ≥ 0.65
-        # → period ≈ 2.8 V) and is well within the ±3 V bounds.
-        half_width = 3.5
+        # Window sized to match the InspectionAgent's actual training
+        # distribution (qdot/perception/dataset.py: half-width = 1.5 x
+        # Coulomb period). Previously hardcoded to 3.5V, which undercovers
+        # the training window by ~40-60% for benchmark params and would be
+        # off by ~5x for other device params (e.g. the E_c=0.5, lever=1.0
+        # "default" params). See qdot/simulator/physics.py.
+        _params = self.state.belief.device_params or {}
+        half_width, _period = coulomb_window(
+            E_c1=_params.get("E_c1", 2.5),
+            E_c2=_params.get("E_c2", 2.5),
+            lever_arm=_params.get("lever_arm", 0.65),
+            factor=1.5,
+            min_half_width=0.5,
+        )
         v1_range = (
             max(vg1_min, centre_vg1 - half_width),
             min(vg1_max, centre_vg1 + half_width),
