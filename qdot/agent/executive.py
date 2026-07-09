@@ -47,6 +47,8 @@ from qdot.agent.narrator import LLMNarrator
 
 from qdot.simulator.physics import coulomb_window
 
+from qdot.simulator.physics import coulomb_window
+
 class ExecutiveAgent:
     def __init__(
         self,
@@ -625,14 +627,21 @@ class ExecutiveAgent:
         nav_v2 = self.state.current_voltage.vg2
         # Scale nav scan to the Coulomb period so the CNN always receives
         # an image consistent with its training distribution.
-        # Training scans span ~1.5 × (2 E_c / lever_arm); we use 0.75 × period
-        # (half of that) as the half-width so the window covers one full cell.
         _params = self.state.belief.device_params
         if _params:
-            _E_c = ((_params.get("E_c1", 1.0) + _params.get("E_c2", 1.0)) / 2.0)
-            _lever = max(_params.get("lever_arm", 1.0), 0.1)
-            _period = 2.0 * _E_c / _lever          # one Coulomb period in volts
-            nav_half_width = float(np.clip(_period / 2.0, 1.5, 5.0))
+            # NOTE: max_half_width=6.5 is a practical cap so one local nav
+            # scan can't eat too much of the measurement budget — it's not
+            # part of the training-distribution match. If success rate is
+            # still budget-starved after this fix, raise it or lower CHARGE_ID's
+            # / this scan's resolution instead of shrinking factor below 1.5.
+            nav_half_width, _period = coulomb_window(
+                E_c1=_params.get("E_c1", 1.0),
+                E_c2=_params.get("E_c2", 1.0),
+                lever_arm=_params.get("lever_arm", 1.0),
+                factor=1.5,
+                min_half_width=1.5,
+                max_half_width=6.5,
+            )
         else:
             nav_half_width = 1.5
         nav_v1_lo = max(self.state.voltage_bounds["vg1"]["min"], nav_v1 - nav_half_width)
