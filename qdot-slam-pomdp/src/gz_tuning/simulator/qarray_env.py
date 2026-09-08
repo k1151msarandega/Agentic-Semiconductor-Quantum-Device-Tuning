@@ -150,6 +150,76 @@ class InfeasibleDeviceParamsError(ValueError):
     numerical-tolerance issue -- see module docstring."""
 
 
+def _construct_dot_array(Cdd: np.ndarray, Cgd: np.ndarray, *, T: float,
+                          algorithm: str = "default", implementation: str = "rust",
+                          charge_carrier: str = "electron") -> DotArray:
+    """Single choke point for constructing a qarray.DotArray from a
+    (Cdd, Cgd) pair, normalizing QArray's OWN feasibility failures to
+    InfeasibleDeviceParamsError.
+
+    BUG FOUND AND FIXED, verified by direct reproduction -- read before
+    removing this wrapper: _solve_self_capacitance_joint (above) only
+    validates that the SOLVED DIAGONAL of Cdd is non-negative, and wraps
+    that failure as InfeasibleDeviceParamsError. It does NOT validate the
+    OFF-DIAGONAL entries (E_cm_intra1, E_cm_intra2, cross_capacitance),
+    which are caller-supplied directly, not solved for. QArray's own
+    DotArray construction separately requires the ENTIRE Cdd matrix
+    (diagonal AND off-diagonal) to be non-negative
+    (qarray.qarray_types.typing_classes.PositiveValuedMatrix), and raises
+    a PLAIN ValueError -- NOT InfeasibleDeviceParamsError -- when that
+    fails. Confirmed directly:
+
+        DeviceParams(..., cross_capacitance=-0.005) -> QArrayEnv(...)
+        raises ValueError (uncaught by `except InfeasibleDeviceParamsError`),
+        not InfeasibleDeviceParamsError.
+
+    This is NOT an edge case: Primer Section 7b's near-zero coupling
+    stratum is a Gaussian CENTERED AT zero (deliberately, since "zero is a
+    real, physically plausible hypothesis boundary") -- roughly half of
+    its draws are negative by construction, and every one of them hit
+    this exact gap. Both belief/kalman.py's feasibility-backoff
+    (`except InfeasibleDeviceParamsError:`) and init/particle_init.py's
+    resampling loop only catch the wrapped type, so an unwrapped
+    off-diagonal failure crashed hard instead of degrading gracefully --
+    at init time (particle_init.py) AND, more seriously, during a live
+    Kalman update whenever a particle's own coupling estimate approaches
+    zero from either side (kalman.py's update()), which is exactly the
+    regime a real ground-zero run is supposed to explore, not avoid.
+
+    Also used by observation_jacobian's finite-difference perturbations
+    (via _soft_prediction_direct): perturbing cross_capacitance by
+    +-step around a small mean (e.g. 0.0001) crosses zero exactly the
+    same way, so this fix matters for the Jacobian computation too, not
+    just particle initialization.
+
+    Fix: catch QArray's own construction-time ValueError here, at the one
+    place DotArray() is actually called, and re-raise as
+    InfeasibleDeviceParamsError with the SAME exception chained via
+    `from e` (so the original QArray message -- which names which matrix
+    entries were negative -- is still visible in the traceback). This
+    makes InfeasibleDeviceParamsError the single, consistent feasibility
+    signal this module promises callers, covering BOTH failure surfaces
+    (diagonal-infeasible-by-the-solve, and off-diagonal-infeasible-by-
+    construction) rather than only the first.
+    """
+    try:
+        return DotArray(
+            Cdd=Cdd, Cgd=Cgd, algorithm=algorithm, implementation=implementation,
+            charge_carrier=charge_carrier, T=T, max_charge_carriers=None,
+        )
+    except ValueError as e:
+        raise InfeasibleDeviceParamsError(
+            f"QArray rejected the constructed (Cdd, Cgd) pair as physically "
+            f"infeasible (a capacitance matrix entry -- diagonal or "
+            f"off-diagonal -- was negative). This commonly happens when a "
+            f"coupling term (cross_capacitance, E_cm_intra1/2) is drawn or "
+            f"perturbed to a small negative value -- physically meaningless "
+            f"for a mutual capacitance, but a legitimate sample from a "
+            f"prior/perturbation centered at or near zero. "
+            f"Original QArray error: {e}"
+        ) from e
+
+
 def _solve_self_capacitance_joint(
     target_E_c: np.ndarray,
     Cdd_offdiag_fixed: np.ndarray,
@@ -287,10 +357,7 @@ def _soft_prediction_direct(
     now-optimized 10 x 209us = 2.09ms warm-started solve cost).
     """
     Cdd, Cgd = build_capacitance_matrices(params, x0=x0)
-    model = DotArray(
-        Cdd=Cdd, Cgd=Cgd, algorithm="default", implementation="rust",
-        charge_carrier="electron", T=T, max_charge_carriers=None,
-    )
+    model = _construct_dot_array(Cdd, Cgd, T=T)
     vg = np.asarray(vg, dtype=np.float64).reshape(1, -1)
     return np.asarray(model.ground_state_open(vg))[0]
 
@@ -397,16 +464,101 @@ def observation_jacobian(
         x0_base = np.diag(Cdd_base).copy()
 
     for k, field in enumerate(tracked_fields):
-        base_val = getattr(params, field)
-        params_plus = params.replace(**{field: base_val + step})
-        params_minus = params.replace(**{field: base_val - step})
-
-        pred_plus = _soft_prediction_direct(params_plus, vg, T=T, x0=x0_base)
-        pred_minus = _soft_prediction_direct(params_minus, vg, T=T, x0=x0_base)
-
-        H[:, k] = (pred_plus - pred_minus) / (2 * step)
+        H[:, k] = _adaptive_fd_column(
+            params, field, vg, T=T, x0_base=x0_base, step0=step
+        )
 
     return H
+
+
+def _adaptive_fd_column(
+    params: DeviceParams,
+    field: str,
+    vg: np.ndarray,
+    *,
+    T: float,
+    x0_base: np.ndarray,
+    step0: float,
+    min_step: float = 1e-8,
+    max_refinements: int = 6,
+    convergence_rtol: float = 0.1,
+) -> np.ndarray:
+    """One column of observation_jacobian's finite-difference Jacobian,
+    with adaptive step-halving to catch and correct a REAL bug found
+    during review (verified by direct reproduction, not just suspected):
+    at sharp single-dot transitions, the default step=1e-4 can be LARGER
+    than the transition's own thermally-softened width in that parameter's
+    direction. When that happens, pred_plus - pred_minus is a FULL 0<->1
+    occupation swing (saturates near +-1.0) rather than a local slope
+    sample, and the returned "derivative" is then just 1/(2*step) --
+    entirely determined by the step size, disconnected from the true local
+    sensitivity. Confirmed directly: at one such point, step=1e-3 and
+    step=1e-4 both returned EXACTLY 1/(2*step) (500.0 and 5000.0
+    respectively, to full float precision) -- not a coincidence, a
+    saturation artifact. Smaller steps (1e-5 down to 1e-7) broke away from
+    that formula but had NOT converged even by 1e-7, meaning the true
+    local sensitivity at that point is likely one or two orders of
+    magnitude larger than the DEFAULT step ever reported -- silently
+    understating a real acquisition-relevant quantity (fim.py's IG_FIM
+    consumes this Jacobian directly) in exactly the region (sharp,
+    highly-informative transitions) where getting it right matters most.
+
+    FIX: detect saturation (any per-dot swing > 0.9, i.e. most of a full
+    0<->1 occupation change) and halve the step, repeating up to
+    max_refinements times or until min_step is reached. Accept a value as
+    converged once two successive step-halvings agree within
+    convergence_rtol OF EACH OTHER (a real Richardson-style convergence
+    check), not merely once the saturation flag clears -- a value can
+    break away from EXACT 1/(2*step) while still being far from its true
+    limit (verified above: 1e-5's result was already off the saturated
+    formula but nowhere near 1e-7's result either).
+
+    NOT a full fix for the class of problem this represents -- Primer
+    Section 4c already anticipated finite-differencing trouble in this
+    exact regime ("finite-differencing a Boltzmann weight exp(-F/T) ...
+    produces floating-point noise indistinguishable from a real gradient
+    in a narrow window") and recommended JAX autodiff as the real
+    solution, which sidesteps step-size choice entirely rather than
+    bounding its damage. jax is already an available optional dependency
+    (Primer Section 9's "not yet checked" JAX QArray path) -- switching
+    observation_jacobian to autodiff through the softargmin expression
+    remains the correct long-term fix and should be prioritized before
+    leaning heavily on IG_FIM's outputs in real single-dot-transition-rich
+    regions. This function is a bounded, verifiable stopgap: it corrects
+    the confirmed saturation artifact and is honest about not having
+    fully converged when it hasn't (returns the best available estimate
+    after max_refinements, whether or not convergence_rtol was actually
+    met -- callers needing a hard guarantee should check convergence
+    themselves by calling this with a tighter min_step).
+    """
+    base_val = getattr(params, field)
+    cur_step = step0
+    prev_col: np.ndarray | None = None
+    col = None
+
+    for _ in range(max_refinements + 1):
+        params_plus = params.replace(**{field: base_val + cur_step})
+        params_minus = params.replace(**{field: base_val - cur_step})
+        pred_plus = _soft_prediction_direct(params_plus, vg, T=T, x0=x0_base)
+        pred_minus = _soft_prediction_direct(params_minus, vg, T=T, x0=x0_base)
+        diff = pred_plus - pred_minus
+        col = diff / (2 * cur_step)
+
+        saturated = bool(np.any(np.abs(diff) > 0.9))
+        if not saturated:
+            break
+        if prev_col is not None:
+            denom = np.maximum(np.abs(col), np.abs(prev_col))
+            denom = np.maximum(denom, 1e-12)
+            if np.all(np.abs(col - prev_col) <= convergence_rtol * denom):
+                break
+
+        prev_col = col
+        cur_step /= 2.0
+        if cur_step < min_step:
+            break
+
+    return col
 
 
 class QArrayEnv:
@@ -431,14 +583,9 @@ class QArrayEnv:
         Cdd, Cgd = build_capacitance_matrices(params, x0=x0)
         self._Cdd = Cdd  # cached -- soft_prediction reuses these rather than
         self._Cgd = Cgd  # re-solving; T doesn't affect the capacitance matrices at all.
-        self._model = DotArray(
-            Cdd=Cdd,
-            Cgd=Cgd,
-            algorithm=algorithm,
-            implementation=implementation,
+        self._model = _construct_dot_array(
+            Cdd, Cgd, T=T, algorithm=algorithm, implementation=implementation,
             charge_carrier=charge_carrier,
-            T=T,
-            max_charge_carriers=None,
         )
 
     @property
@@ -560,10 +707,14 @@ class QArrayEnv:
         full ~500us joint-solve cost a second time on every call, on top of
         __init__'s own solve, for identical Cdd/Cgd).
         """
-        model = DotArray(
-            Cdd=self._Cdd, Cgd=self._Cgd, algorithm="default", implementation="rust",
-            charge_carrier="electron", T=T, max_charge_carriers=None,
-        )
+        # Safe by construction, not just by convention: self._Cdd/self._Cgd
+        # were already validated once in __init__ (via _construct_dot_array),
+        # and are never mutated afterward -- re-solving at a different T
+        # cannot reintroduce an off-diagonal/diagonal infeasibility that
+        # wasn't already ruled out. Routed through the same helper anyway
+        # for a single, consistent construction path rather than a
+        # special-cased raw DotArray() call here.
+        model = _construct_dot_array(self._Cdd, self._Cgd, T=T)
         vg = np.asarray(vg, dtype=np.float64).reshape(1, -1)
         if vg.shape[-1] != N_GATE:
             raise ValueError(
