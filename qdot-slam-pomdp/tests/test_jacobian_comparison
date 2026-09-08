@@ -1,0 +1,194 @@
+import sys
+for d in ["simulator"]:
+    sys.path.insert(0, d)
+
+import time
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from qarray_env import (
+    DeviceParams, QArrayEnv, observation_jacobian, _soft_prediction_direct,
+    TRACKED_PARAM_FIELDS, N_DOT,
+)
+
+DEFAULT_PARAMS = DeviceParams(
+    E_c1=2.5, E_c2=2.7, alpha1=0.05, alpha2=0.05,
+    E_cm_intra1=0.3, E_cm_intra2=0.3, cross_capacitance=0.05,
+)
+
+# ============================================================
+# Reconstruct the OLD (pre-fix) fixed-step finite-difference
+# Jacobian exactly as it used to be, for a real before/after
+# comparison -- not a synthetic "what if" version. This mirrors
+# the code that was in observation_jacobian before
+# _adaptive_fd_column replaced it: one central-difference
+# evaluation per tracked parameter, always at step=1e-4, no
+# saturation detection, no refinement.
+# ============================================================
+def fixed_step_jacobian(params: DeviceParams, vg: np.ndarray, *, T: float, step: float = 1e-4) -> np.ndarray:
+    vg = np.asarray(vg, dtype=np.float64)
+    x0_base = None
+    H = np.zeros((N_DOT, len(TRACKED_PARAM_FIELDS)))
+    for k, field in enumerate(TRACKED_PARAM_FIELDS):
+        base_val = getattr(params, field)
+        params_plus = params.replace(**{field: base_val + step})
+        params_minus = params.replace(**{field: base_val - step})
+        pred_plus = _soft_prediction_direct(params_plus, vg, T=T, x0=x0_base)
+        pred_minus = _soft_prediction_direct(params_minus, vg, T=T, x0=x0_base)
+        H[:, k] = (pred_plus - pred_minus) / (2 * step)
+    return H
+
+
+print("Sweeping (gate0, gate1) with gate2=gate3=0, computing BOTH the old "
+      "fixed-step and current adaptive-step Jacobian at every point...")
+
+N = 70
+v_range = np.linspace(0.0, 30.0, N)
+V0, V1 = np.meshgrid(v_range, v_range, indexing="ij")
+
+norm_before = np.zeros((N, N))
+norm_after = np.zeros((N, N))
+saturated_before = np.zeros((N, N), dtype=bool)  # any column pinned to exactly 1/(2*step)
+alpha_col_before = np.zeros((N, N))
+alpha_col_after = np.zeros((N, N))
+
+alpha1_idx = TRACKED_PARAM_FIELDS.index("alpha1")
+expected_saturated_value = 1.0 / (2 * 1e-4)
+
+t_start = time.time()
+n_refined = 0
+for i in range(N):
+    for j in range(N):
+        vg = np.array([V0[i, j], V1[i, j], 0.0, 0.0])
+        H_before = fixed_step_jacobian(DEFAULT_PARAMS, vg, T=0.05)
+        H_after = observation_jacobian(DEFAULT_PARAMS, vg, T=0.05)
+
+        norm_before[i, j] = np.linalg.norm(H_before)
+        norm_after[i, j] = np.linalg.norm(H_after)
+        alpha_col_before[i, j] = H_before[0, alpha1_idx]
+        alpha_col_after[i, j] = H_after[0, alpha1_idx]
+
+        # Flag points where the OLD value was exactly (to numerical
+        # precision) the step-size-determined saturation artifact --
+        # i.e. genuinely wrong, not just "large".
+        if np.any(np.isclose(np.abs(H_before), expected_saturated_value, rtol=1e-6)):
+            saturated_before[i, j] = True
+            n_refined += 1
+    if (i + 1) % 10 == 0:
+        elapsed = time.time() - t_start
+        print(f"  row {i+1}/{N} done ({elapsed:.1f}s elapsed)")
+
+elapsed = time.time() - t_start
+print(f"Sweep done in {elapsed:.1f}s. "
+      f"{saturated_before.sum()}/{N*N} points ({saturated_before.mean():.1%}) "
+      f"showed the OLD saturation artifact.")
+
+# ============================================================
+# Figure: before/after Frobenius-norm surfaces, the saturation
+# flag map, and a direct before-vs-after scatter for the alpha1
+# column specifically (the column that showed the exact
+# 1/(2*step) artifact in the point we found earlier).
+# ============================================================
+fig, axes = plt.subplots(2, 3, figsize=(17, 10))
+
+# LOG SCALE is required here, not optional: ||H|| spans from ~0 (deep
+# plateaus, the vast majority of the swept domain -- Section 4c's own
+# finding, confirmed) up to ~4.5e5 (the worst sharp transitions). A linear
+# scale with a 99th-percentile clip crushes essentially the entire
+# transition structure to black, since 99% of points sit near zero -- this
+# was tried first and looked like an empty plot, not a data problem.
+floor = 1e-6
+log_before = np.log10(norm_before + floor)
+log_after = np.log10(norm_after + floor)
+vmin_shared = min(log_before.min(), log_after.min())
+vmax_shared = max(log_before.max(), log_after.max())
+
+im0 = axes[0, 0].imshow(log_before.T, origin="lower",
+                         extent=[0, 30, 0, 30], cmap="inferno", aspect="auto",
+                         vmin=vmin_shared, vmax=vmax_shared)
+axes[0, 0].set_title("log10(||H||) -- OLD fixed-step FD (step=1e-4)")
+axes[0, 0].set_xlabel("Gate 0 (V)")
+axes[0, 0].set_ylabel("Gate 1 (V)")
+plt.colorbar(im0, ax=axes[0, 0])
+
+im1 = axes[0, 1].imshow(log_after.T, origin="lower",
+                         extent=[0, 30, 0, 30], cmap="inferno", aspect="auto",
+                         vmin=vmin_shared, vmax=vmax_shared)
+axes[0, 1].set_title("log10(||H||) -- NEW adaptive-step FD (fixed)")
+axes[0, 1].set_xlabel("Gate 0 (V)")
+axes[0, 1].set_ylabel("Gate 1 (V)")
+plt.colorbar(im1, ax=axes[0, 1])
+
+im2 = axes[0, 2].imshow(saturated_before.T, origin="lower",
+                         extent=[0, 30, 0, 30], cmap="Reds", aspect="auto", vmin=0, vmax=1)
+axes[0, 2].set_title(f"OLD saturation artifact detected\n({saturated_before.mean():.1%} of grid, "
+                      f"all lying ON the transition lines visible above)")
+axes[0, 2].set_xlabel("Gate 0 (V)")
+axes[0, 2].set_ylabel("Gate 1 (V)")
+
+# Before-vs-after scatter, log-log (symlog to handle exact zeros) --
+# linear axes here were dominated by 2-3 extreme outliers and crushed
+# everything else to the origin.
+mask_nonzero = (np.abs(alpha_col_before.ravel()) > floor) | (np.abs(alpha_col_after.ravel()) > floor)
+axes[1, 0].scatter(np.abs(alpha_col_before.ravel())[mask_nonzero],
+                    np.abs(alpha_col_after.ravel())[mask_nonzero], s=6, alpha=0.5)
+axes[1, 0].set_xscale("symlog", linthresh=1.0)
+axes[1, 0].set_yscale("symlog", linthresh=1.0)
+lims = [0, max(np.abs(alpha_col_before).max(), np.abs(alpha_col_after).max()) * 1.1]
+axes[1, 0].plot(lims, lims, "k--", linewidth=1, label="y=x (no change)")
+axes[1, 0].set_xlabel("|alpha1 sensitivity| -- OLD fixed-step")
+axes[1, 0].set_ylabel("|alpha1 sensitivity| -- NEW adaptive-step")
+axes[1, 0].set_title("Before vs after (symlog axes), every grid point")
+axes[1, 0].legend(fontsize=8)
+
+ratio = np.divide(norm_after, norm_before, out=np.ones_like(norm_after), where=norm_before > floor)
+im3 = axes[1, 1].imshow(np.log10(np.clip(ratio, 1e-2, 1e2)).T, origin="lower",
+                         extent=[0, 30, 0, 30], cmap="RdBu_r", aspect="auto", vmin=-1, vmax=1)
+axes[1, 1].set_title("log10(||H||_after / ||H||_before)\nred=corrected upward (was UNDERstated),\nblue=corrected downward")
+axes[1, 1].set_xlabel("Gate 0 (V)")
+axes[1, 1].set_ylabel("Gate 1 (V)")
+plt.colorbar(im3, ax=axes[1, 1])
+
+# Max |H| entry across ALL 5 tracked-parameter columns at each flagged
+# point (not just alpha1 specifically) -- a flagged point's saturation may
+# have been triggered by a different column than alpha1, so alpha1's own
+# value there isn't always the one pinned to 1/(2*step).
+flagged_idx = np.argwhere(saturated_before)
+max_entry_at_flagged = []
+for i, j in flagged_idx:
+    vg = np.array([V0[i, j], V1[i, j], 0.0, 0.0])
+    H_b = fixed_step_jacobian(DEFAULT_PARAMS, vg, T=0.05)
+    max_entry_at_flagged.append(np.max(np.abs(H_b)))
+max_entry_at_flagged = np.array(max_entry_at_flagged)
+
+axes[1, 2].hist(max_entry_at_flagged, bins=30, alpha=0.7, color="tab:orange")
+axes[1, 2].axvline(expected_saturated_value, color="red", linestyle="--",
+                    label=f"1/(2*step) = {expected_saturated_value:.0f}")
+axes[1, 2].set_xlabel("max |H entry| at flagged point (OLD)")
+axes[1, 2].set_ylabel("count")
+axes[1, 2].set_title(f"OLD values at all {saturated_before.sum()} flagged points\n"
+                      f"(clustered at 1/(2*step) or sqrt(2)/(2*step) --\n"
+                      f"i.e. determined by step size, not physics)")
+axes[1, 2].legend(fontsize=8)
+
+plt.tight_layout()
+plt.savefig("/mnt/user-data/outputs/jacobian_before_after.png", dpi=140)
+plt.close()
+print("Saved jacobian_before_after.png")
+
+print(f"\nSummary:")
+print(f"  Points with confirmed OLD saturation artifact: {saturated_before.sum()} / {N*N} "
+      f"({saturated_before.mean():.1%})")
+print(f"  Max ||H|| before: {norm_before.max():.1f}, after: {norm_after.max():.1f}")
+print(f"  At saturated points, mean correction factor "
+      f"(after/before): {ratio[saturated_before].mean():.2f}x")
+
+on_transition = norm_before > 1.0  # meaningfully nonzero sensitivity at all
+n_on_transition = on_transition.sum()
+n_saturated_on_transition = (saturated_before & on_transition).sum()
+print(f"  Of the {n_on_transition} points ({n_on_transition/(N*N):.1%} of the grid) "
+      f"that sit on a transition at all (||H||>1), "
+      f"{n_saturated_on_transition} ({n_saturated_on_transition/max(n_on_transition,1):.1%}) "
+      f"showed the saturation artifact.")
