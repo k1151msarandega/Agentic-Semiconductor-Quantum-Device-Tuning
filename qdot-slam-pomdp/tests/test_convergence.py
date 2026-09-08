@@ -59,12 +59,30 @@ class TestTargetOccupationProbability:
         # different Sigma must get DIFFERENT probabilities -- the old
         # hard-round version would have scored both as 1.0, which is
         # exactly the point-estimate-masks-uncertainty bug this replaces.
-        vg = np.array([6.5, 6.5, 6.5, 6.5])
+        #
+        # sigma_scale values recalibrated after fixing observation_jacobian's
+        # finite-difference saturation bug (see qarray_env.py's
+        # _adaptive_fd_column docstring) -- the corrected Jacobian at this
+        # point is ~20x steeper than the old saturated value, so the
+        # 'tight' particle needs a correspondingly smaller Sigma to still
+        # register as confident.
+        # vg CHOSEN DELIBERATELY, not arbitrarily: this must be a point
+        # where the observation Jacobian H is actually nonzero, i.e. near
+        # a real transition (Section 4c -- H is genuinely zero in a stable
+        # plateau, verified directly: an earlier version of this test used
+        # vg=[6.5]*4, which sits in a plateau with H identically zero,
+        # making sigma_eff zero regardless of Sigma and giving p=1.0 for
+        # BOTH particles -- not a bug in target_occupation_probability,
+        # a bad test point. This vg was found by scanning
+        # QArrayEnv.soft_prediction directly for a genuinely
+        # thermally-softened (partial-occupation) point, then confirmed
+        # to give a nonzero H via observation_jacobian before use here.
+        vg = np.array([9.992498124531133] * 4)
         ground_truth = QArrayEnv(DEFAULT_PARAMS)
         true_occ = np.round(ground_truth.soft_prediction(vg, T=0.05))
 
-        tight = _particle(DEFAULT_PARAMS, sigma_scale=1e-8)
-        loose = _particle(DEFAULT_PARAMS, sigma_scale=5.0)
+        tight = _particle(DEFAULT_PARAMS, sigma_scale=1e-14)
+        loose = _particle(DEFAULT_PARAMS, sigma_scale=1e-11)
 
         p_tight = target_occupation_probability(tight.kalman, vg, true_occ)
         p_loose = target_occupation_probability(loose.kalman, vg, true_occ)
