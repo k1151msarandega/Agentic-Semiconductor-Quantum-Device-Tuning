@@ -1,46 +1,13 @@
-"""
-gz_tuning.acquisition.fim
-
-IG_FIM: the Fisher-information-based half of Primer Section 5's two-dial
-acquisition function. Closed form, no outcome-averaging needed -- the
-Kalman covariance update is deterministic given a candidate vg (doesn't
-depend on what's actually observed), which is exactly what makes this term
-cheap relative to IG_BALD's need to consider outcomes.
-
-PRIMER DISCREPANCY, flagged rather than silently resolved: Section 5 states
-two different formulas for IG_FIM in two places:
-  - Bullet-point definition: "IG_FIM(v) = Sum_i w_i * [logdet(Sigma_i) -
-    logdet(Sigma_i'(v))]" -- no 1/2 factor.
-  - Units section: "IG_FIM = 0.5 * [logdet(Sigma_prior,normalized) -
-    logdet(Sigma_posterior,normalized)]" -- WITH a 1/2 factor, justified
-    explicitly: "the literal differential-entropy-reduction formula (H =
-    0.5*logdet(2*pi*e*Sigma), constant cancels in the difference) -- not an
-    approximation."
-This module implements the units-section version (WITH the 1/2 factor),
-since it comes with an explicit, standard derivation (multivariate Gaussian
-differential entropy genuinely has a 1/2 coefficient) while the bullet-point
-version appears to be an imprecise restatement, not an independently
-justified alternative. If you intended the bullet-point version instead,
-this is a one-line change (drop the 0.5) -- but do so deliberately, not by
-assuming this file made an arbitrary choice.
-"""
-
 from __future__ import annotations
 
 import numpy as np
 
 from kalman import DEFAULT_SCALE, N_PARAMS, ParticleKalmanFilter, normalized_logdet
 from particle_filter import RBParticleFilter
-from qarray_env import observation_jacobian
+from qarray_env import build_capacitance_matrices, observation_jacobian
 
 
 def _kalman_posterior_covariance(Sigma: np.ndarray, H: np.ndarray, R: np.ndarray) -> np.ndarray:
-    """Standard Kalman covariance update (Joseph form, matching kalman.py's
-    own update() for consistency), WITHOUT needing an actual innovation --
-    this is exactly the property that makes IG_FIM closed-form: the
-    posterior covariance depends only on (Sigma, H, R), not on what value
-    would actually be measured.
-    """
     S = H @ Sigma @ H.T + R
     K = Sigma @ H.T @ np.linalg.inv(S)
     I_KH = np.eye(Sigma.shape[0]) - K @ H
@@ -54,20 +21,43 @@ def compute_ig_fim_particle(
     *,
     T: float = 0.05,
     scale: np.ndarray = DEFAULT_SCALE,
+    x0_base: np.ndarray | None = None,
 ) -> float:
-    """Single particle's own IG_FIM contribution at candidate vg: 0.5 *
-    [logdet(Sigma_prior,normalized) - logdet(Sigma_posterior,normalized)].
+    """Same as repo version, PLUS an `x0_base` param: the particle's own
+    already-solved self-capacitance diagonal (e.g. from a QArrayEnv built
+    once per acquisition step by candidate_search.py), passed straight
+    through to observation_jacobian to skip its own redundant base solve
+    -- same fix pattern as bald.py's `envs` param, for the FIM term.
 
-    Handles the -inf edge case from normalized_logdet (Sigma already
-    exactly singular, e.g. after many informative updates) explicitly:
-    if Sigma_prior's logdet is already -inf, there's no further information
-    to gain (already at a point estimate in some direction) -- returns 0.0
-    rather than propagating a NaN from (-inf - -inf).
+    BUG FIX (found via a real run): an extremely steep FD Jacobian --
+    which happens near a sharp transition when the adaptive step in
+    observation_jacobian has shrunk close to its floor -- can blow up the
+    Kalman gain enough that Sigma_posterior picks up non-finite entries
+    through floating-point overflow in the Joseph-form update. eigvalsh
+    then raises LinAlgError('Eigenvalues did not converge'), crashing the
+    whole particle filter. Confirmed via a real run (crashed at
+    n_particles=20 during acquisition search, not during Phase 0).
+
+    Fix: treat a non-finite H or Sigma_posterior as "this candidate is
+    numerically untrustworthy for this particle" and contribute 0 IG,
+    rather than letting it propagate into a crash -- the same
+    "unobservable rather than broken" posture already used for the
+    infeasible-perturbation fallback in qarray_env.py.
     """
     vg = np.asarray(vg, dtype=np.float64)
-    H = observation_jacobian(kalman.params, vg, T=T)
-    Sigma_posterior = _kalman_posterior_covariance(kalman.Sigma, H, R)
+    H = observation_jacobian(kalman.params, vg, T=T, x0_base=x0_base)
+    if not np.all(np.isfinite(H)):
+        return 0.0
 
+    Sigma_posterior = _kalman_posterior_covariance(kalman.Sigma, H, R)
+    if not np.all(np.isfinite(Sigma_posterior)):
+        return 0.0
+
+    # normalized_logdet now floors individual eigenvalues instead of
+    # returning -inf for the whole determinant (see kalman.py's docstring
+    # for why), so it no longer returns -inf here -- this guard is dead
+    # under the fixed version but left as a defensive check in case that
+    # invariant changes again.
     logdet_prior = normalized_logdet(kalman.Sigma, scale=scale)
     if logdet_prior == -np.inf:
         return 0.0
@@ -83,15 +73,12 @@ def compute_ig_fim(
     *,
     T: float = 0.05,
     scale: np.ndarray = DEFAULT_SCALE,
+    x0_bases: list[np.ndarray] | None = None,
 ) -> float:
-    """Population-level IG_FIM: WEIGHTED MEAN of per-particle terms, per
-    Primer Section 5's explicit instruction -- NOT min/max. Between-particle
-    disagreement in current parameter MEANS is candidate-independent
-    (doesn't vary with vg), so it's a constant offset that drops out of
-    argmax_v entirely; weighted mean of within-particle terms is sufficient
-    for choosing where to measure next.
-    """
     total = 0.0
-    for p in pf.particles:
-        total += p.weight * compute_ig_fim_particle(p.kalman, vg, R, T=T, scale=scale)
+    for i, p in enumerate(pf.particles):
+        x0_base = x0_bases[i] if x0_bases is not None else None
+        total += p.weight * compute_ig_fim_particle(
+            p.kalman, vg, R, T=T, scale=scale, x0_base=x0_base
+        )
     return total
