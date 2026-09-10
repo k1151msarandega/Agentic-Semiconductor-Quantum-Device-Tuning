@@ -77,6 +77,13 @@ not a full pipeline.
 - **Virtual-gate compensation** to decouple cross-talk between the two DQDs. Deliberately not
   built. This means DQD-2's navigation is allowed to physically perturb DQD-1's occupation via
   the cross-term — this is in scope *to happen*, not something to prevent. See Section 6.
+  **Confirmed visually and numerically:** with DQD-B's occupation held fixed, DQD-A's entire
+  charge-stability diagram shifts by a uniform, rigid translation across 100% of a swept 2D
+  plane — expected, not a red flag: with the other DQD's occupation fixed, the cross-capacitance
+  term is linear in that fixed occupation number, so it acts as a constant additive offset to
+  DQD-A's effective chemical potential everywhere in the sweep. A perfectly rigid shift is the
+  correct signature of a properly-wired bilinear cross-term, confirming Section 4b's capacitance
+  recipe is behaving as designed for this specific case.
 - **The parent pipeline's 6-stage state machine, DQC gatekeeper, HITL manager, governance
   logging, LLM narrator.** Confirmed via direct code read (not just inherited from the primer)
   that these are tightly coupled to a different phase's assumptions (fine-tuning, assumed-known
@@ -249,6 +256,27 @@ device-literature range) against `assert_feasible`, pick final ground-truth valu
 margin — don't pick a replacement number by feel, that's the exact mistake that produced this
 finding. Cross-check against QADAPT's own simulated lever-arm scale for external calibration.
 
+**RESOLVED — real 90×90 grid sweep run against actual `QArrayEnv` construction (not the
+closed-form `assert_feasible` check, which was superseded by direct construction for the final
+verification), confirming the above by measurement rather than formula:**
+- The closed-form estimate above checks out closely: real sweep gives max `E_c≈0.757` at
+  `α=1.0` (vs. the `~0.81` estimated analytically) — same conclusion, consistent numbers.
+- **Final ground-truth values, locked in:** `α≈0.05–0.075`, `E_c≈2.0–2.2` — confirmed to sit
+  with real margin (`~0.144`, minimum diagonal `Cdd` entry, comfortably above the `margin=0.1`
+  guardrail). This closes the Section 12 blocking item — use these going forward, not the
+  originally-illustrative `E_c≈2.5, α≈1.0` values (confirmed infeasible above).
+- **New, secondary finding from the same investigation:** QArray's own condition-number check
+  emits a warning that `algorithm='default'` (used throughout `qarray_env.py`) isn't recommended
+  at this device's coupling strength. The suggested alternative, `algorithm='brute_force'`,
+  requires `max_charge_carriers` to be set explicitly — which directly conflicts with Section 3's
+  entire reason for choosing QArray (ground-zero, no assumed scale) — so switching wholesale is
+  not a real option. A 500-point spot check (including the sharp 2-state transition that caused
+  the Section 4c Jacobian bug) found zero disagreement between `default` and `brute_force`.
+  **Not yet checked: 3+-state near-degenerate points (triple points)** — the regime where an
+  approximate algorithm is most likely to actually diverge from brute-force, and the one case
+  the spot check didn't cover. Worth one targeted check before treating this warning as fully
+  resolved; the 500-point result is reassuring, not conclusive.
+
 ### 4c. Observability: `E_c` is only learnable near interdot transitions — verified, load-bearing
 
 **Finding, confirmed empirically and matching the textbook result exactly:** a same-dot
@@ -275,6 +303,24 @@ noise indistinguishable from a real gradient in a narrow window. Autodiff sidest
 entirely — no step-size tuning, no noise floor, decouples "is `T` well-chosen" from "is my
 differencing accurate." Set `T` as a function of the readout noise `σ` already defined in the
 noise model (Section 6a) — e.g. `T ≈ α·σ` — rather than a second freestanding constant.
+
+**Interim stopgap shipped, and status upgraded from "recommended improvement" to "needed before
+trusting real runs" based on visualization evidence:** an adaptive-step-size finite-difference
+fix was built and confirmed to correct the original saturation bug — a 4,900-point sweep found
+the old fixed-step FD understated `‖H‖` by a mean factor of 33× (worst case 60×) at 94.5% of
+actually-informative (near-transition) points, with the erroneous values clustering exactly at
+`1/(2·step)`-type artifacts — a step-size signature, not physics. The adaptive fix corrects this
+and preserves the correct transition geometry. **But it does not replace the JAX-autodiff
+recommendation** — the fix's own documentation is explicit that it still bottoms out in
+floating-point noise at very small steps, and two subsequent findings confirm this matters in
+practice, not just in principle: (1) real `IG_FIM` landscapes are near-zero almost everywhere
+with information concentrated in isolated single-pixel spikes — exactly the regime where
+residual small-step noise is most likely to distort which candidate looks like the argmax; (2) a
+real FIM-only trajectory got stuck for 14 consecutive steps repeatedly selecting one candidate
+(see Section 5b) — a case where Jacobian precision at that one heavily-revisited point directly
+determined 14 steps' worth of decisions. **Do the JAX-autodiff rewrite before generating any
+result that depends on `IG_FIM` selecting between close candidates**, not as a later-stage
+polish item.
 
 ---
 
@@ -338,6 +384,30 @@ joint-entropy fix above lands, the bound changes again — a true joint entropy 
 local state set is bounded by `log(n_states)` in that set, not `N_DOT·log(2)`. **Re-derive the
 `w(t)` dynamic-range argument only after the joint-entropy fix is in place**, not against either
 of these interim bounds.
+
+### 5b. Greedy single-step selection can trap on a locally-rich, globally-narrow vein — distinct from the zero-IG stall above
+
+**Confirmed via a real FIM-only trajectory, not a hypothetical.** This is a *different* failure
+mode from Section 5's already-documented "IG correctly goes to zero when a window is
+uninformative" case — here, `IG_FIM` stayed genuinely **nonzero** for 14 consecutive steps, not
+degenerate at all, and a naive stall-detector watching for `IG≈0` would not have caught it. What
+happened instead: the policy repeatedly re-selected the same candidate point, which had real
+sensitivity to `α1` but — per Section 4c's observability constraint — **exactly zero** sensitivity
+to `E_c1` (same-dot-like point). Result: `α1`'s error collapsed from `6×10⁻⁴` to `~5×10⁻⁶` almost
+immediately, while `E_c1`'s error stayed completely flat for the entire run. The policy found a
+locally-rich, one-dimensional vein of information and had no mechanism to leave it once
+diminishing (but still nonzero) returns kept it locally optimal.
+
+**Why this matters more than a slow-convergence observation:** a single-step-lookahead greedy
+policy has no structural pressure to seek out interdot boundaries once it's found *some* nonzero
+signal nearby — Section 4c's constraint ("E_c only learnable near interdot boundaries") is a
+statement about where information exists, but nothing in the two-dial acquisition function as
+specified forces exploration toward those regions once a locally-good-enough alternative is
+available. This is a second, independent argument (alongside Section 5's aliasing case) for why
+an outer relocation/diversification mechanism isn't optional polish — it needs to trigger on
+**information becoming narrow** (concentrated in one parameter direction for many consecutive
+steps), not only on **information vanishing** (`IG≈0`). These are different triggers and a
+detector built for one won't catch the other.
 
 ### Units — resolved, not an invented exchange rate
 
@@ -633,10 +703,13 @@ copy wholesale):
 
 ## 12. Still open — carry into the coding chat, not yet resolved here
 
-- **Ground-truth `(E_c, α)` values** (Section 4b) — the illustrative values used throughout early
-  discussion are confirmed infeasible; a proper `α ∈ [0.05, 0.4]` feasibility sweep against
-  `assert_feasible` is needed and not yet done. **Blocks generating any real results** until
-  resolved — highest-priority open item.
+- **JAX-autodiff Jacobian rewrite (Section 4c)** — status upgraded to highest priority: the
+  adaptive-step FD stopgap is confirmed working but confirmed insufficient near sharp/close-call
+  candidates, and real acquisition landscapes are dominated by exactly that regime. Needed before
+  trusting any `IG_FIM`-driven candidate choice, not deferred polish.
+- **Outer relocation/diversification trigger (Sections 5, 5b)** — now confirmed needed for *two*
+  distinct failure modes with different signatures (IG→0 aliasing vs. narrow-but-nonzero greedy
+  trapping); a detector needs to catch both, not just the zero case.
 - **Exact stratification scheme** for coupling-term particle seeding (Section 7b) — range,
   distribution shape, number of strata — not yet numerically specified.
 - **`p_conf`/`ε` derivation** — `N`'s derivation logic is now fully settled (Section 6a); `p_conf`
@@ -647,9 +720,24 @@ copy wholesale):
   the 197ms/step figure at the particle counts actually used.
 - **`w(t)` dynamic-range schedule** (Section 5a) — re-derive only after the `IG_BALD`
   joint-entropy fix lands; the correct bound to design against isn't settled until then.
+- **`algorithm='default'` vs. `brute_force` at 3+-state near-degenerate points** (Section 4b) —
+  500-point spot check found zero disagreement but didn't cover triple points specifically; one
+  targeted check needed before treating the condition-number warning as fully resolved.
 - **JAX vs. rust QArray implementation** at higher particle counts, if/when needed (Section 9).
 - **QArray+ public release** (Section 3) — check periodically; would resolve `t_c` non-
   identifiability structurally if it lands before the writing phase.
+- **`raster_scan.py`'s actuation-quiescence signal** — flagged as likely non-functional on a real
+  (non-repeated-point) grid: using the next *scheduled* grid point's displacement as the
+  quiescence proxy will almost always exceed a noise-floor-scale `epsilon`, meaning the baseline
+  can only converge in its final `N` steps regardless of true belief confidence. Needs a decision
+  between guard-A-only for the baseline (matches Section 8's literal phrasing) or a redefined
+  guard-B signal computed from the raster's accumulated belief rather than its fixed schedule —
+  not yet resolved.
+- **`belief_stable`/`target_occupation_mass` ignoring each particle's own `Σᵢ`** — currently uses
+  only the rounded mean estimate, which could mask genuine uncertainty right at the interdot
+  transitions where it matters most (same failure shape as the boundary-distance and blue-line
+  fixes already caught twice elsewhere) — needs a look once `particle_filter.py` is available for
+  review.
 - **Two verification-hygiene items, not yet closed:**
   1. The claim "no one has published literal SLAM applied to ground-zero QD tuning" (surfaced
      via Gemini) needs the same independent literature check the rest of related work already
@@ -662,8 +750,10 @@ to-do): the E_c/Cdd mapping and factor-of-2 (4b), the `t_c` non-identifiability 
 decision (4a), the interdot-observability finding (4c), the boundary-distance/`sigma_eff`
 derivation through two rounds of correction (6a), the empirical-calibration decision for
 `threshold_low` (6a), the analytic-Jacobian-over-finite-difference decision (4c), the `IG_BALD`
-joint-entropy bug identification (5a), the `IG_FIM` 0.5-factor discrepancy (5), and the QArray+
-paper review (3).
+joint-entropy bug identification (5a), the `IG_FIM` 0.5-factor discrepancy (5), the QArray+ paper
+review (3), **the ground-truth `(E_c, α)` feasibility sweep — now closed with real numbers
+(`α≈0.05–0.075`, `E_c≈2.0–2.2`), confirmed via actual `QArrayEnv` construction (4b)**, and the
+FD-saturation bug's magnitude, confirmed and quantified via real sweep (4c).
 
 ---
 
