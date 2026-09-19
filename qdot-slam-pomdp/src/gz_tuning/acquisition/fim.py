@@ -4,7 +4,7 @@ import numpy as np
 
 from kalman import DEFAULT_SCALE, N_PARAMS, ParticleKalmanFilter, normalized_logdet
 from particle_filter import RBParticleFilter
-from qarray_env import build_capacitance_matrices, observation_jacobian
+from qarray_jax import jax_observation_jacobian
 
 
 def _kalman_posterior_covariance(Sigma: np.ndarray, H: np.ndarray, R: np.ndarray) -> np.ndarray:
@@ -45,7 +45,13 @@ def compute_ig_fim_particle(
     infeasible-perturbation fallback in qarray_env.py.
     """
     vg = np.asarray(vg, dtype=np.float64)
-    H = observation_jacobian(kalman.params, vg, T=T, x0_base=x0_base)
+    # BUG FIX (Section 12's top-priority open item, now done): exact
+    # analytic (JAX autodiff) Jacobian in place of finite differences --
+    # see qarray_jax.py. x0_base (self-capacitance diagonal, linear
+    # units) is converted to log-space since that's what
+    # jax_observation_jacobian's warm-start expects.
+    log_x0 = np.log(x0_base) if x0_base is not None else None
+    H = jax_observation_jacobian(kalman.params, vg, T=T, log_x0=log_x0)
     if not np.all(np.isfinite(H)):
         return 0.0
 
