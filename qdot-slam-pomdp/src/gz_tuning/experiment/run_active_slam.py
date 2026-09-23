@@ -82,6 +82,7 @@ def run_active_slam(
     phase0_background_fractions: tuple[float, ...] = (1.0 / 3.0, 2.0 / 3.0),
     seed_fraction: float = 0.5,
     seed_jitter_sigma: float = 0.3,
+    target_ess_frac: float | None = 0.5,
     rng: np.random.Generator | None = None,
     verbose: bool = False,
 ) -> ActiveSlamResult:
@@ -125,7 +126,7 @@ def run_active_slam(
             pf, ground_truth, noise,
             vg_range=vg_range, n_points_per_line=phase0_n_points_per_line,
             background_fractions=phase0_background_fractions, T=T, rng=rng,
-            verbose=verbose,
+            target_ess_frac=target_ess_frac, verbose=verbose,
         )
         if coarse_result.n_transitions_found > 0:
             seed_points = coarse_result.seed_points
@@ -149,7 +150,7 @@ def run_active_slam(
 
         true_reading = ground_truth.soft_prediction(v_next, T=T)
         measured = noise.sample(true_reading, rng)
-        pf.update(measured, v_next, R, T=T, envs=search.envs)
+        pf.update(measured, v_next, R, T=T, envs=search.envs, target_ess_frac=target_ess_frac)
 
         ess = pf.effective_sample_size()
         resampled = False

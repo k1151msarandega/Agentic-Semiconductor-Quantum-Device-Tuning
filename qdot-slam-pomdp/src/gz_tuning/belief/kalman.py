@@ -9,8 +9,8 @@ from qarray_env import (
     InfeasibleDeviceParamsError,
     QArrayEnv,
     TRACKED_PARAM_FIELDS,
-    observation_jacobian,
 )
+from qarray_jax import jax_observation_jacobian
 
 N_PARAMS = len(TRACKED_PARAM_FIELDS)
 
@@ -106,7 +106,14 @@ class ParticleKalmanFilter:
         current_params = self.params
         current_env = env if env is not None else QArrayEnv(current_params)
         x0_base = np.diag(current_env._Cdd).copy()
-        H = observation_jacobian(current_params, vg, T=T, x0_base=x0_base)
+        # BUG FIX (Section 12's top-priority open item): now uses the
+        # exact analytic (JAX autodiff) Jacobian instead of adaptive
+        # finite differences -- see qarray_jax.py for validation against
+        # the real rust backend and why the finite-difference version was
+        # unreliable near sharp transitions. jax_observation_jacobian
+        # wants log(x0_base) as its warm-start (it solves in log-space to
+        # guarantee positivity -- see qarray_jax.py's docstring for why).
+        H = jax_observation_jacobian(current_params, vg, T=T, log_x0=np.log(x0_base))
         predicted = current_env.soft_prediction(vg, T=T)
         innovation_full = measured_occupation - predicted
 

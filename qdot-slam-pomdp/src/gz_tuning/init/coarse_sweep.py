@@ -69,6 +69,9 @@ def run_coarse_sweep(
     n_points_per_line: int = 25,
     background_fractions: tuple[float, ...] = (1.0 / 3.0, 2.0 / 3.0),
     T: float = 0.05,
+    ess_resample_frac: float = 0.5,
+    mu_jitter_scale: float | None = 0.1,
+    target_ess_frac: float | None = 0.5,
     rng: np.random.Generator | None = None,
     verbose: bool = False,
 ) -> CoarseSweepResult:
@@ -77,6 +80,26 @@ def run_coarse_sweep(
     into pf.update(). Returns the vg locations where a rounded-occupation
     jump was detected in the measured signal, for use as candidate-search
     seeds (candidate_search.select_next_measurement's `seed_points` arg).
+
+    BUG FIX (found via a real sweep): this loop calls pf.update() up to
+    ~100-200 times in a row (n_points_per_line * background_fractions *
+    N_GATE). An EARLIER version never resampled anywhere in this loop.
+    Weight updates are multiplicative, so even a well-behaved per-step
+    likelihood (see particle_filter.py's mixture-likelihood fix) will
+    still drive ESS toward 1.0 given enough consecutive un-resampled
+    updates -- confirmed directly: fixing the single-step likelihood
+    collapse (ESS 1.0 -> 5.17 on one measurement, tested in isolation)
+    made NO visible difference to a full-run multi-seed sweep, which
+    still showed ESS=1.0 in 15/15 runs. This is why: by the time the
+    main loop's history starts recording ESS, Phase 0 had already
+    collapsed it, regardless of the per-step fix. Fix: check ESS after
+    every measurement and resample (with the same mu-roughening jitter
+    used in particle_filter.py's resample(), for the same reason --
+    without it, resampling here would just duplicate mu again) exactly
+    like run_active_slam.py's main loop already does -- same threshold
+    parameter, same mechanism, just applied to the phase this project
+    had been treating as "just data collection" rather than as part of
+    the filter that needs the same degeneracy guard as everywhere else.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -85,9 +108,11 @@ def run_coarse_sweep(
     background_values = [lo + f * (hi - lo) for f in background_fractions]
     sweep_axis = np.linspace(lo, hi, n_points_per_line)
     R = noise.R_matrix()
+    n_particles = pf.n_particles
 
     seed_points: list[np.ndarray] = []
     n_measurements = 0
+    n_resamples = 0
 
     for gate_idx in range(N_GATE):
         for bg_val in background_values:
@@ -99,8 +124,12 @@ def run_coarse_sweep(
             for vg in line_vgs:
                 true_reading = ground_truth.soft_prediction(vg, T=T)
                 measured = noise.sample(true_reading, rng)
-                pf.update(measured, vg, R, T=T)
+                pf.update(measured, vg, R, T=T, target_ess_frac=target_ess_frac)
                 n_measurements += 1
+
+                if pf.effective_sample_size() < ess_resample_frac * n_particles:
+                    pf.resample(rng, mu_jitter_scale=mu_jitter_scale)
+                    n_resamples += 1
 
                 rounded = np.round(measured)
                 if prev_rounded is not None and not np.array_equal(rounded, prev_rounded):
@@ -113,6 +142,9 @@ def run_coarse_sweep(
                         )
                 prev_rounded = rounded
                 prev_vg = vg
+
+    if verbose:
+        print(f"  Phase 0 resampled {n_resamples} times over {n_measurements} measurements")
 
     seed_array = np.array(seed_points, dtype=np.float64) if seed_points else np.empty((0, N_GATE))
     return CoarseSweepResult(
