@@ -7,7 +7,8 @@ import numpy as np
 from noise_model import per_dot_sigma_eff, p_flip_per_dot
 from particle_filter import RBParticleFilter
 from kalman import ParticleKalmanFilter
-from qarray_env import N_DOT, N_GATE, QArrayEnv, observation_jacobian
+from qarray_env import N_DOT, N_GATE, QArrayEnv
+from qarray_jax import jax_observation_jacobian
 
 
 def target_occupation_probability(
@@ -23,7 +24,12 @@ def target_occupation_probability(
         raise ValueError(f"target_occupation must have shape ({N_DOT},)")
 
     env = QArrayEnv(kalman.params)
-    H = observation_jacobian(kalman.params, vg, T=T)
+    # Analytic JAX Jacobian, same as belief/kalman.py's update -- the old
+    # finite-difference observation_jacobian was found unreliable near
+    # sharp transitions (see qarray_jax.py); this scoring must use the
+    # same H the belief update does. Warm-start from env's self-capacitance.
+    x0_base = np.diag(env._Cdd).copy()
+    H = jax_observation_jacobian(kalman.params, vg, T=T, log_x0=np.log(x0_base))
     prediction = env.soft_prediction(vg, T=T)
 
     frac = prediction - np.floor(prediction)
