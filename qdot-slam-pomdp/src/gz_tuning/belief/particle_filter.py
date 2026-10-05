@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -82,6 +82,20 @@ def _gaussian_log_likelihood(residual: np.ndarray, cov: np.ndarray) -> float:
 @dataclass
 class RBParticleFilter:
     particles: list[OccupationParticle]
+    last_beta: float = field(default=1.0, init=False, repr=False)
+    """The tempering beta actually used by the most recent update() call
+    (1.0 if that call passed target_ess_frac=None, or if beta=1 already
+    met the target -- see _find_tempering_beta's docstring: it only
+    returns <1.0 when an untempered update WOULD have dropped ESS below
+    target). Added as a diagnostic after a real run raised the question
+    of whether adaptive tempering is throttling occasionally (as
+    designed, for the early-collapse problem it was built to fix) or on
+    essentially every step long-term (which would mean resampling is
+    being suppressed indefinitely, not just delayed -- a materially
+    different situation with no fix that just adding more steps solves).
+    Not present before this patch; nothing previously exposed beta at
+    all.
+    """
 
     def __post_init__(self) -> None:
         self._normalize_weights()
@@ -218,6 +232,7 @@ class RBParticleFilter:
             )
         else:
             beta = 1.0
+        self.last_beta = beta
 
         log_weights = log_prior_weights + beta * log_lik
         log_weights -= log_weights.max()
