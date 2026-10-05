@@ -43,15 +43,58 @@ No equivalent tension exists for the red line: between-particle covariance
 of the means is inherently a single population-level quantity (there is no
 "one particle's own between-particle disagreement"), so it is used exactly
 as computed by particle_filter.py's between_particle_covariance(), a single
-number compared against the same thresholds as the blue line's fraction
-check.
+number.
 
-THRESHOLDS ARE NOT DERIVED HERE. threshold_low/threshold_high are expected
-to come from simulator.noise_model.derive_phase_thresholds (fed by
-calibrate_threshold_low) -- this module is deliberately agnostic to HOW
-those numbers were produced, mirroring belief/kalman.py and
+BUG FIX (found via a real Phase-2 smoke run, confirmed structurally against
+this file): an earlier version of this docstring's last sentence claimed
+red was "compared against the same thresholds as the blue line's fraction
+check." That was the actual shipped behavior -- one threshold_low/
+threshold_high pair, used for both lines -- and it is wrong, not just
+under-argued. A real run showed why directly: blue's mass fraction climbed
+0.176 -> 0.826 over 60 steps while red sat flat around -4.1, against a
+threshold_low of -57.36 -- roughly 53 nats away, on a quantity that isn't
+trending toward it at all. The root cause isn't a design flaw in THIS
+file's logic (splitting one threshold into two is a trivial field change,
+which is what this version does); it's that the only threshold-producing
+function that existed (noise_model.calibrate_threshold_low) constructs a
+single ParticleKalmanFilter, not an ensemble -- between-particle covariance
+is mathematically undefined for one particle, so that function was
+structurally incapable of yielding a red-scaled number, and anyone who fed
+its output to both lines (exactly as this file's old docstring instructed)
+would hit this same wall. The fix has two parts: this file now takes
+SEPARATE threshold pairs for each line (blue_threshold_low/high,
+red_threshold_low/high), and noise_model.py gained
+calibrate_red_threshold(), which actually instantiates a population (via
+init_particle_filter) and reads off pf.between_particle_covariance() --
+the only way a red-scaled reference number can exist at all.
+
+THRESHOLDS ARE NOT DERIVED HERE. blue_threshold_low/high are expected to
+come from simulator.noise_model.derive_phase_thresholds(calibrate_
+threshold_low(...)); red_threshold_low/high from derive_phase_thresholds(
+calibrate_red_threshold(...)) -- two independent calls, per the bug fix
+above, not the same call reused. This module remains deliberately agnostic
+to HOW those numbers were produced, mirroring belief/kalman.py and
 belief/particle_filter.py's own separation of "correct recursion" from
 "where the numeric constant comes from."
+
+SECTION 6b ADDITION -- champion election for goal-directed navigation:
+once Phase 2 triggers, control/goal_directed_policy.py needs a single
+"current best hypothesis" particle to navigate toward (the primer's "the
+current MAP estimate's target-occupation boundary"). elect_champion()
+below returns the highest-weight particle -- the actual MAP-estimate
+proxy for a particle filter -- deliberately NOT a weighted mean of
+particles, which is the MMSE estimate, a different quantity: because
+adaptive tempering (see particle_filter.py's _find_tempering_beta)
+deliberately keeps multiple live discrete hypotheses alive rather than
+collapsing early, an arithmetic mean of mu across particles that still
+disagree can land in a physically meaningless region between two real
+hypotheses (a transition boundary is not an average-able quantity the way
+a scalar estimate is). PhaseSwitchController holds the elected champion
+fixed across steps (avoiding target jitter between near-tied top-weight
+particles), re-electing only on Phase 1 -> Phase 2 entry or when the held
+particle object no longer lives in the current particle list -- see
+PhaseSwitchController.champion's docstring for why that specific trigger
+(not per-step re-election, not permanent stickiness) is the right scope.
 """
 
 from __future__ import annotations
@@ -62,7 +105,7 @@ from enum import Enum
 import numpy as np
 
 from kalman import DEFAULT_SCALE, normalized_logdet
-from particle_filter import RBParticleFilter
+from particle_filter import OccupationParticle, RBParticleFilter
 
 
 class Phase(Enum):
@@ -94,6 +137,33 @@ def within_particle_mass_fraction_below(
     return total
 
 
+def elect_champion(pf: RBParticleFilter) -> OccupationParticle:
+    """MAP-estimate proxy for a particle filter: the single highest-weight
+    particle -- NOT a weighted mean of particles (that is the MMSE
+    estimate, a different quantity; see module docstring for why the
+    distinction is load-bearing here, not just terminological). Ties are
+    broken by first occurrence; given the red-line precondition Phase 2
+    entry already requires (between-particle agreement below
+    red_threshold_low), an exact tie between substantively different
+    hypotheses is not expected in practice.
+    """
+    return max(pf.particles, key=lambda p: p.weight)
+
+
+def _is_live(particle: OccupationParticle, pf: RBParticleFilter) -> bool:
+    """Identity check, NOT equality. OccupationParticle and
+    ParticleKalmanFilter are undecorated @dataclass, so the generated
+    `__eq__` compares fields -- including `mu`, a numpy array. Any
+    `in`-style or `==` check against a held particle reference hits numpy
+    array comparison and raises `ValueError: truth value of an array is
+    ambiguous` the first time it actually runs, not at review time. `is`
+    identity is the only safe way to ask "does this exact object still
+    live in pf.particles" (e.g. to detect that a resample() has replaced
+    the entire particle list since this reference was captured).
+    """
+    return any(particle is p for p in pf.particles)
+
+
 @dataclass(frozen=True)
 class PhaseSwitchDiagnostics:
     """Snapshot of both diagnostic lines against both thresholds, for
@@ -118,26 +188,37 @@ class PhaseSwitchController:
     band was last committed to), unlike the pure functions above, which
     depend only on the current belief.
 
-    threshold_low/threshold_high: see module docstring -- not computed
-    here.
+    blue_threshold_low/blue_threshold_high, red_threshold_low/
+    red_threshold_high: see module docstring -- not computed here; each
+    pair must come from its own calibration call (calibrate_threshold_low
+    for blue, calibrate_red_threshold for red -- NOT the same call reused
+    for both, which was the bug this split fixes).
     mass_fraction_required: Section 6's ">=90%" figure -- kept as an
     explicit parameter (default 0.9) rather than hardcoded, since the
     primer's own phrasing ("e.g.") flags it as illustrative, not fixed.
     """
 
-    threshold_low: float
-    threshold_high: float
+    blue_threshold_low: float
+    blue_threshold_high: float
+    red_threshold_low: float
+    red_threshold_high: float
     mass_fraction_required: float = 0.9
     scale: np.ndarray = field(default_factory=lambda: DEFAULT_SCALE.copy())
     phase: Phase = Phase.PHASE_1_RAW_SIGNAL
+    _champion: OccupationParticle | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if self.threshold_high <= self.threshold_low:
+        if self.blue_threshold_high <= self.blue_threshold_low:
             raise ValueError(
-                f"threshold_high ({self.threshold_high}) must exceed "
-                f"threshold_low ({self.threshold_low}) -- see "
-                f"noise_model.derive_phase_thresholds, which enforces this "
-                f"via an additive (not multiplicative) hysteresis gap."
+                f"blue_threshold_high ({self.blue_threshold_high}) must "
+                f"exceed blue_threshold_low ({self.blue_threshold_low}) -- "
+                f"see noise_model.derive_phase_thresholds, which enforces "
+                f"this via an additive (not multiplicative) hysteresis gap."
+            )
+        if self.red_threshold_high <= self.red_threshold_low:
+            raise ValueError(
+                f"red_threshold_high ({self.red_threshold_high}) must "
+                f"exceed red_threshold_low ({self.red_threshold_low})."
             )
         if not (0.0 < self.mass_fraction_required <= 1.0):
             raise ValueError(
@@ -145,40 +226,73 @@ class PhaseSwitchController:
                 f"{self.mass_fraction_required}"
             )
 
+    @property
+    def champion(self) -> OccupationParticle | None:
+        """The elected MAP-proxy particle (see elect_champion) driving
+        Section 6b's goal-directed navigation. None while in Phase 1.
+
+        Held fixed across steps within Phase 2 to avoid the navigation
+        target jittering between near-tied top-weight particles step to
+        step -- EXCEPT across a resample() event, which forces
+        re-election: resample() replaces `pf.particles` wholesale and its
+        own mu-jitter step deliberately breaks exact particle lineage by
+        design (see particle_filter.py's resample() docstring), so "the
+        same particle survived resampling" is not a claim worth trying to
+        preserve across that boundary -- and a real ensemble-level belief
+        shift large enough to trigger a resample is a legitimate reason to
+        reconsider the navigation target, unlike identity churn alone.
+
+        Practical consequence, worth being explicit about rather than
+        leaving implicit in the mechanism: the Phase-2 navigation target
+        CAN visibly jump immediately after a resample. That is the
+        intended tradeoff (see above), not a bug -- but it is a real,
+        user-visible behavior of the tuning loop.
+        """
+        return self._champion
+
     def diagnostics(self, pf: RBParticleFilter) -> PhaseSwitchDiagnostics:
         """Compute both lines against both thresholds without mutating
         controller state -- exposed separately from step() so callers can
         log/inspect before (or without) actually advancing the hysteresis
         state machine."""
         blue_mass_low = within_particle_mass_fraction_below(
-            pf, self.threshold_low, scale=self.scale
+            pf, self.blue_threshold_low, scale=self.scale
         )
         blue_mass_high = within_particle_mass_fraction_below(
-            pf, self.threshold_high, scale=self.scale
+            pf, self.blue_threshold_high, scale=self.scale
         )
         red_line = pf.between_particle_covariance(scale=self.scale)
         return PhaseSwitchDiagnostics(
             blue_mass_fraction_below_low=blue_mass_low,
             blue_mass_fraction_below_high=blue_mass_high,
             red_line=red_line,
-            red_below_low=red_line < self.threshold_low,
-            red_below_high=red_line < self.threshold_high,
+            red_below_low=red_line < self.red_threshold_low,
+            red_below_high=red_line < self.red_threshold_high,
         )
 
     def step(self, pf: RBParticleFilter) -> PhaseSwitchDiagnostics:
         """Evaluate the current belief and advance the hysteresis state
         machine per Section 6:
-          - PHASE_1 -> PHASE_2 requires BOTH lines below threshold_low
-            (blue: mass-based fraction >= mass_fraction_required; red:
-            single value below threshold_low).
+          - PHASE_1 -> PHASE_2 requires BOTH lines below their own
+            threshold_low (blue: mass-based fraction >= mass_fraction_
+            required against blue_threshold_low; red: pf.between_
+            particle_covariance() below red_threshold_low).
           - PHASE_2 -> PHASE_1 (revert) requires EITHER line climbing back
-            above threshold_high -- a real, reportable regression (Primer
+            above its own threshold_high -- a real, reportable regression (Primer
             Section 8's failure-mode-B framing: a genuine physical
             perturbation, not noise, can legitimately push the belief back
             into Phase 1; this is a feature of the hysteresis band, not a
             bug to suppress).
-        Returns the diagnostics computed for this call; self.phase reflects
-        the (possibly updated) state after this call.
+
+        Also advances champion election (Section 6b, see the `champion`
+        property's docstring): elects on Phase 1 -> Phase 2 entry, holds
+        fixed while the held particle is still live, force-re-elects if a
+        resample has replaced it, and clears to None on any reversion to
+        Phase 1.
+
+        Returns the diagnostics computed for this call; self.phase (and
+        self.champion) reflect the (possibly updated) state after this
+        call.
         """
         diag = self.diagnostics(pf)
 
@@ -194,5 +308,11 @@ class PhaseSwitchController:
                 or not diag.red_below_high
             ):
                 self.phase = Phase.PHASE_1_RAW_SIGNAL
+
+        if self.phase is Phase.PHASE_2_FEATURE_BASED:
+            if self._champion is None or not _is_live(self._champion, pf):
+                self._champion = elect_champion(pf)
+        else:
+            self._champion = None
 
         return diag
