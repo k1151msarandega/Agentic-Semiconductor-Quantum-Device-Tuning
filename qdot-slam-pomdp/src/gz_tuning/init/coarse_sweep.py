@@ -1,47 +1,3 @@
-"""
-gz_tuning.init.coarse_sweep
-
-NEW MODULE -- Phase 0. Implements the primer's own original expert-input
-framing (Natalia Ares, quoted directly in the primer's Section 6 "Working
-hypothesis from expert input"): "...once enough distinct transitions have
-been located -- e.g., via a few 1D probes at different secondary-gate
-voltages -- to fit E_c/lever_arm from their spacing..." That framing
-specified a coarse, deterministic, belief-independent discovery step. It
-never got built; the two-dial acquisition design (bald.py/fim.py/
-two_dial.py) specifies how to SCORE a candidate voltage but never how one
-gets PROPOSED from a literal blank start. Confirmed as a real, not
-hypothetical, gap by run_active_slam.py's own smoke test: with candidates
-drawn uniformly over the full 4-gate range, IG_total scored exactly 0.0
-on 18/20 steps, because interdot transitions occupy a thin slice of a 4D
-15V-per-gate range that blind uniform sampling essentially never lands
-near.
-
-Design, and why "just draw more random candidates" doesn't substitute for
-this: the probability of a uniform sample landing within tolerance of a
-lower-dimensional transition manifold shrinks combinatorially with
-dimension; a deterministic sweep that actually crosses every gate's full
-range is the only proposal method that's *guaranteed* to cross every
-transition line that gate participates in, at least once, regardless of
-particle belief (which is exactly what's unreliable at true ground-zero --
-Section 2's standing "scale must be earned from measurement" principle,
-same instinct as the sign-bug cautionary tale).
-
-Per gate, sweep at >1 background setting (not just one central value) --
-closer to Ares's literal "1D probes at different secondary-gate voltages"
-than a single midpoint sweep, and reduces the risk that one unlucky
-background choice happens to sit in a dead region for that gate.
-
-Every point measured here is a REAL measurement (through the noise model,
-never the ground-truth signal directly) and is fed into the particle
-filter via the normal pf.update() path -- this isn't a separate
-diagnostic pass, it's genuine Phase 0 data collection that directly
-improves particle means before Phase 1 (raw two-dial search) even starts.
-
-Transition detection operates on the (noisy) MEASURED occupation, not the
-ground truth -- consistent with ground-zero: a real experiment only has
-access to what it measured.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -55,9 +11,19 @@ from qarray_env import N_GATE, QArrayEnv
 
 @dataclass
 class CoarseSweepResult:
-    seed_points: np.ndarray  # (n_seeds, N_GATE) -- vg locations bracketing a detected jump
+    seed_points: np.ndarray
     n_measurements: int
     n_transitions_found: int
+    beta_trace: np.ndarray = field(default_factory=lambda: np.empty(0))
+    """pf.last_beta after each Phase-0 measurement, in order. Added to
+    compare against Phase 1's acquisition-driven tempering throttle: a
+    deterministic per-gate scan (what Phase 0 is) has no mechanism
+    connecting candidate choice to particle disagreement the way IG-based
+    acquisition does, so if beta here is ALSO pinned near 0, that's
+    evidence tempering throttle is a property of the prior/noise width
+    alone, independent of acquisition quality -- not a sign that Phase 1's
+    acquisition is 'succeeding' at finding disagreement-inducing points.
+    """
 
 
 def run_coarse_sweep(
@@ -75,32 +41,6 @@ def run_coarse_sweep(
     rng: np.random.Generator | None = None,
     verbose: bool = False,
 ) -> CoarseSweepResult:
-    """Sweep each of the N_GATE gates individually, at len(background_fractions)
-    different fixed settings of the other three gates, feeding every point
-    into pf.update(). Returns the vg locations where a rounded-occupation
-    jump was detected in the measured signal, for use as candidate-search
-    seeds (candidate_search.select_next_measurement's `seed_points` arg).
-
-    BUG FIX (found via a real sweep): this loop calls pf.update() up to
-    ~100-200 times in a row (n_points_per_line * background_fractions *
-    N_GATE). An EARLIER version never resampled anywhere in this loop.
-    Weight updates are multiplicative, so even a well-behaved per-step
-    likelihood (see particle_filter.py's mixture-likelihood fix) will
-    still drive ESS toward 1.0 given enough consecutive un-resampled
-    updates -- confirmed directly: fixing the single-step likelihood
-    collapse (ESS 1.0 -> 5.17 on one measurement, tested in isolation)
-    made NO visible difference to a full-run multi-seed sweep, which
-    still showed ESS=1.0 in 15/15 runs. This is why: by the time the
-    main loop's history starts recording ESS, Phase 0 had already
-    collapsed it, regardless of the per-step fix. Fix: check ESS after
-    every measurement and resample (with the same mu-roughening jitter
-    used in particle_filter.py's resample(), for the same reason --
-    without it, resampling here would just duplicate mu again) exactly
-    like run_active_slam.py's main loop already does -- same threshold
-    parameter, same mechanism, just applied to the phase this project
-    had been treating as "just data collection" rather than as part of
-    the filter that needs the same degeneracy guard as everywhere else.
-    """
     if rng is None:
         rng = np.random.default_rng()
 
@@ -113,6 +53,7 @@ def run_coarse_sweep(
     seed_points: list[np.ndarray] = []
     n_measurements = 0
     n_resamples = 0
+    beta_trace: list[float] = []
 
     for gate_idx in range(N_GATE):
         for bg_val in background_values:
@@ -126,6 +67,7 @@ def run_coarse_sweep(
                 measured = noise.sample(true_reading, rng)
                 pf.update(measured, vg, R, T=T, target_ess_frac=target_ess_frac)
                 n_measurements += 1
+                beta_trace.append(pf.last_beta)
 
                 if pf.effective_sample_size() < ess_resample_frac * n_particles:
                     pf.resample(rng, mu_jitter_scale=mu_jitter_scale)
@@ -151,4 +93,5 @@ def run_coarse_sweep(
         seed_points=seed_array,
         n_measurements=n_measurements,
         n_transitions_found=len(seed_points),
+        beta_trace=np.array(beta_trace, dtype=np.float64),
     )
