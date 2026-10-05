@@ -10,14 +10,56 @@ re-derive any of it. Treat every decision below as settled unless flagged "OPEN.
 
 ## 1. Scope and north star
 
-**Claim 1 (primary, headline):** active POMDP+SLAM exploration (particle-filter belief +
-information-gain-driven action selection) can tune **two capacitively-coupled double quantum
-dots (4 dots total) from a true ground-zero start** — no assumed device parameters, no
-proportional patch sizing, no pre-existing coarse localization — more efficiently
-(measurements-to-convergence) than a raster-scan baseline. Anchored on an independently
-verified literature gap: no existing work does explicit information-theoretic/particle-filter
-active exploration for *ground-zero spatial* tuning specifically, as opposed to RL-reward-based
+**Claim 1 (primary, headline) — revised framing, precisely scoped after a real preemption
+check:** active FastSLAM-style exploration (particle-filter belief + information-gain-driven
+action selection) can tune **two capacitively-coupled double quantum dots (4 dots total) from a
+true joint ground-zero start** — no assumed device parameters, no proportional patch sizing, no
+pre-existing coarse localization, and critically, **the cross-DQD coupling is inferred live
+rather than compensated away via virtual gates** — more efficiently (measurements-to-convergence)
+than a raster-scan baseline. **Do not claim unqualified "ground-zero" as the novelty** — Schuff
+et al. (arXiv:2402.03931, Ares/Zumbühl groups) demonstrated literal grounded-device-to-Rabi-
+oscillations full autonomy on a single device. Single-device ground-zero is closed; this
+project's actual, still-open claim is **joint ground-zero for coupled multi-device systems
+without virtual-gate decoupling** — contrast specifically against MAVIS (Zwolak/Delft —
+compensates cross-talk away) and Schuff (single device, not joint-coupled). State the claim this
+specifically every time, not as bare "ground-zero." Anchored on an independently verified
+literature gap: no existing work does explicit information-theoretic/particle-filter active
+exploration for *ground-zero spatial* tuning specifically, as opposed to RL-reward-based
 exploration (Nguyen et al. 2021) or methods that assume a coarse-tuning starting point.
+
+**Verification status on this citation:** confirmed directly via search — arXiv:2402.03931,
+"Fully autonomous tuning of a spin qubit," Schuff, Carballido, et al., Ares (Oxford) and
+Zumbühl (Basel) groups, is real, and its abstract matches the claimed content ("first fully
+autonomous tuning of a semiconductor qubit, from a grounded device to Rabi oscillations").
+**Not yet independently confirmed: the specific journal venue ("Nature Electronics").** The
+verified record shows it as an arXiv preprint; check the actual publication venue before citing
+it that specifically in the paper, rather than carrying the venue claim forward unverified.
+
+**Terminology, settled, stop relitigating:** say **"FastSLAM-style joint discrete-continuous
+belief architecture,"** never bare "SLAM." This is the technically correct claim, not a
+watered-down one — you're borrowing a specific, citable algorithmic factorization (Montemerlo et
+al. 2002: particles for discrete multimodal state, per-particle Kalman for continuous
+parameters), not claiming the full SLAM problem (localization + mapping + loop closure), which
+this system genuinely doesn't have: voltage is a controlled, precisely-known input (no pose
+drift to localize), and the "map" (Section 4's 5-parameter vector) is one small tightly-coupled
+global calibration, not a spatial landmark set. The factorization still earns the FastSLAM
+comparison — via conditional independence given discrete occupation state, not spatial/landmark
+independence, which is the correct justification to give if pressed, not the robotics-standard
+one. Loop closure is explicitly out of scope (Section 2) and should not be reframed as
+hysteresis-correction to rescue the SLAM label — that mapping is imprecise (loop closure
+corrects *pose*-drift under an assumed-static map; hysteresis is a *non-stationary map* problem,
+a structurally different thing) and a careful technical reader (Havoutis specifically) will catch
+the mismatch.
+
+**Evidence status for the core mechanism — resolved, see Section 6b for the full account.** A
+6-seed active-vs-raster belief-covariance comparison, independently re-run against this
+project's own current code after an earlier version of the result was found to be
+substantially inflated by the since-fixed discrete-state collapse bug (Section 4d), confirms a
+real, more modest effect: active exploration reduces belief uncertainty faster than a raster
+baseline, consistently across all 6 seeds (mean gap ≈10 in normalized log-covariance units,
+versus the original, inflated claim's mean gap of ≈25). This is genuine, independently verified
+evidence for the "active beats blind exploration" half of Claim 1 — cite the corrected numbers,
+not the original ones.
 
 **Claim 2 (supporting):** joint modeling of the cross-DQD coupling term outperforms a
 naive-decoupled baseline (run the single-DQD ground-zero method twice, ignoring the coupling
@@ -251,76 +293,174 @@ def assert_feasible(E_matrix, alpha_matrix, margin=0.1):
         raise ValueError(f"Infeasible: alpha too large relative to E_c/coupling for dots {np.where(diag<margin)[0]}")
 ```
 
-**Action needed (not yet done):** run a small grid sweep of `α ∈ [0.05, 0.4]` (realistic
-device-literature range) against `assert_feasible`, pick final ground-truth values with real
-margin — don't pick a replacement number by feel, that's the exact mistake that produced this
-finding. Cross-check against QADAPT's own simulated lever-arm scale for external calibration.
-
-**RESOLVED — real 90×90 grid sweep run against actual `QArrayEnv` construction (not the
-closed-form `assert_feasible` check, which was superseded by direct construction for the final
-verification), confirming the above by measurement rather than formula:**
+**RESOLVED — real 90×90 grid sweep run against actual `QArrayEnv` construction, confirming by
+measurement rather than formula:**
 - The closed-form estimate above checks out closely: real sweep gives max `E_c≈0.757` at
   `α=1.0` (vs. the `~0.81` estimated analytically) — same conclusion, consistent numbers.
 - **Final ground-truth values, locked in:** `α≈0.05–0.075`, `E_c≈2.0–2.2` — confirmed to sit
   with real margin (`~0.144`, minimum diagonal `Cdd` entry, comfortably above the `margin=0.1`
-  guardrail). This closes the Section 12 blocking item — use these going forward, not the
-  originally-illustrative `E_c≈2.5, α≈1.0` values (confirmed infeasible above).
-- **New, secondary finding from the same investigation:** QArray's own condition-number check
-  emits a warning that `algorithm='default'` (used throughout `qarray_env.py`) isn't recommended
-  at this device's coupling strength. The suggested alternative, `algorithm='brute_force'`,
-  requires `max_charge_carriers` to be set explicitly — which directly conflicts with Section 3's
-  entire reason for choosing QArray (ground-zero, no assumed scale) — so switching wholesale is
-  not a real option. A 500-point spot check (including the sharp 2-state transition that caused
-  the Section 4c Jacobian bug) found zero disagreement between `default` and `brute_force`.
-  **Not yet checked: 3+-state near-degenerate points (triple points)** — the regime where an
-  approximate algorithm is most likely to actually diverge from brute-force, and the one case
-  the spot check didn't cover. Worth one targeted check before treating this warning as fully
-  resolved; the 500-point result is reassuring, not conclusive.
+  guardrail). Use these going forward, not the originally-illustrative `E_c≈2.5, α≈1.0` values.
+- **Secondary finding:** QArray's own condition-number check emits a warning that
+  `algorithm='default'` isn't recommended at this device's coupling strength. The suggested
+  alternative, `algorithm='brute_force'`, requires `max_charge_carriers` to be set explicitly —
+  conflicting with Section 3's entire reason for choosing QArray — so switching wholesale isn't
+  a real option. A 500-point spot check found zero disagreement between `default` and
+  `brute_force`. **Not yet checked: 3+-state near-degenerate points (triple points)** — worth
+  one targeted check before treating this warning as fully resolved.
 
 ### 4c. Observability: `E_c` is only learnable near interdot transitions — verified, load-bearing
 
 **Finding, confirmed empirically and matching the textbook result exactly:** a same-dot
 transition's addition voltage is `V_add = e/C_g` — independent of `E_c`. Differentiating the
 model's occupation prediction with respect to `E_c` at a single-dot transition gives **exactly
-zero** sensitivity; at an interdot/multi-dot boundary, sensitivity is real and nonzero (verified:
-transition voltage shifts smoothly, 6.88→6.51, as `E_c1` varies 1.9→2.5).
+zero** sensitivity; at an interdot/multi-dot boundary, sensitivity is real and nonzero.
 
 **This is a hard constraint on the acquisition design, not a footnote:** `IG_FIM`'s candidate
-search must actually reach interdot boundaries to learn `E_c` at all — dense probing near
-wherever the discrete belief currently sits is not sufficient if that region is single-dot-like.
-Worth stating explicitly in the paper's methods section as a real, physics-derived constraint on
-where active exploration needs to look, not an implementation detail.
+search must actually reach interdot boundaries to learn `E_c` at all.
 
-**Practical consequence for the observation Jacobian (`H`, used by both `IG_FIM` and the noise
-model's `sigma_eff`, Section 6a):** `H` must be computed from the actual **thermally-softened**
-ground-state prediction (`softargmin` at `T>0`, which flows through `Cdd_inv` and therefore
-`E_c`), *not* from `Cgd·vg` alone — `Cgd·vg` is exactly linear in `vg` with coefficients from
-`Cgd` only, and is therefore structurally blind to `E_c` at every voltage, not just off-transition
-ones. Use **autodiff (JAX)** through the softargmin expression rather than finite differences —
-finite-differencing a Boltzmann weight `exp(−F/T)` at realistic `E_c` scales relative to `T`
-underflows (`exp(−E_c/T)` with `E_c≈2.5`, `T=0.05` gives `exp(−50)`), producing floating-point
-noise indistinguishable from a real gradient in a narrow window. Autodiff sidesteps this
-entirely — no step-size tuning, no noise floor, decouples "is `T` well-chosen" from "is my
-differencing accurate." Set `T` as a function of the readout noise `σ` already defined in the
-noise model (Section 6a) — e.g. `T ≈ α·σ` — rather than a second freestanding constant.
+**Analytic Jacobian rewrite — DONE, validated directly against the real production (rust)
+backend, not just derived on paper.** Implemented via `jax.jacobian` chained through QArray's
+own JAX ground-state code (confirmed cleanly differentiable, no rewrite needed there) and a
+log-space-reparameterized `jaxopt.LevenbergMarquardt` solve for the self-capacitance step
+(guarantees positivity by construction — a naive `GaussNewton` attempt on the raw variables
+converged to a spurious negative-capacitance root on the first real test). Getting this correct
+required finding and fixing three separate bugs along the way, each caught by checking against
+QArray's real behavior rather than trusting the derivation: (1) skipping the raw-to-Maxwell
+capacitance conversion QArray applies internally, (2) a wrong sign convention on `Cgd`, (3)
+forgetting QArray internally rescales `T` by the Boltzmann constant before use — the last one
+being how the Section 4e temperature bug below was actually found. Final version matches the
+rust backend exactly on every test point checked. See `qarray_jax.py`.
 
-**Interim stopgap shipped, and status upgraded from "recommended improvement" to "needed before
-trusting real runs" based on visualization evidence:** an adaptive-step-size finite-difference
-fix was built and confirmed to correct the original saturation bug — a 4,900-point sweep found
-the old fixed-step FD understated `‖H‖` by a mean factor of 33× (worst case 60×) at 94.5% of
-actually-informative (near-transition) points, with the erroneous values clustering exactly at
-`1/(2·step)`-type artifacts — a step-size signature, not physics. The adaptive fix corrects this
-and preserves the correct transition geometry. **But it does not replace the JAX-autodiff
-recommendation** — the fix's own documentation is explicit that it still bottoms out in
-floating-point noise at very small steps, and two subsequent findings confirm this matters in
-practice, not just in principle: (1) real `IG_FIM` landscapes are near-zero almost everywhere
-with information concentrated in isolated single-pixel spikes — exactly the regime where
-residual small-step noise is most likely to distort which candidate looks like the argmax; (2) a
-real FIM-only trajectory got stuck for 14 consecutive steps repeatedly selecting one candidate
-(see Section 5b) — a case where Jacobian precision at that one heavily-revisited point directly
-determined 14 steps' worth of decisions. **Do the JAX-autodiff rewrite before generating any
-result that depends on `IG_FIM` selecting between close candidates**, not as a later-stage
-polish item.
+**Confirms the original motivation directly, not just in principle:** at a real point this
+project's own acquisition search had used, the old adaptive-FD Jacobian returned three exactly-
+zero rows and one absurd `8042`-magnitude spike in the fourth, while the analytic Jacobian gives
+smooth, consistent values (`~1e-4` to `~1e-5`) across all four rows at the same point.
+
+### 4d. Discrete occupation state: diagnosis confirmed, fix reconciled and validated — no longer blocking
+
+**Diagnosis, unchanged and independently reconfirmed:** `OccupationParticle` had no discrete
+label; occupation was computed on the fly as a deterministic function of each particle's
+continuous parameters and voltage. Under readout noise `σ=0.05`, two particles predicting
+categorically different occupations at the same voltage could differ by a residual costing
+`1²/(2·0.0025) = 200` nats of log-likelihood — enough to collapse weights to `[1,0,0,...]`
+after a single measurement. Confirmed directly: `min_ess = 1.0` in 15/15 sweep runs, mean
+parameter error flat across particle counts (10/20/40 → 20.1%/17.2%/19.4%, no trend).
+
+**A competing hypothesis was tested and refuted first, worth keeping as a documented negative
+result so it isn't re-tried.** Before finding the real mechanism, a divergent run (`E_c1`
+collapsing to ~0.02 against a true value of 2.1) was suspected to be driven by the particle
+walking up against the `assert_feasible` capacitance-feasibility boundary. Traced directly via
+`min_c_self` at every step of the divergent particle's lineage: it stayed at 20–56 throughout,
+nowhere near the ~0.1 margin. **Refuted, not just unconfirmed.**
+
+**Actual mechanism, found via GC-safe particle-lineage tracing** (an `id()`-keyed trace
+initially gave a spurious result — Python reused a garbage-collected object's memory address,
+making it look like one particle's `mu` jumped impossibly between steps; fixed by storing a
+persistent trace ID on each object instead of trusting `id()`): a diffuse ground-zero prior,
+evaluated against the very first real measurement, collapses to one surviving lineage almost
+immediately — confirmed directly, every original particle received exactly one `update()` call
+before the first resample discarded all of them. Everything after that is one trajectory's
+random walk (plus cosmetic roughening jitter on resample) replicated across the ensemble, not
+real diversity — which is how a 40-particle ensemble can end up unanimously, confidently wrong
+without ESS ever looking degenerate by the end of a run.
+
+**Reconciled fix — a lighter-weight implementation of the same underlying repair the original
+diagnosis called for, not a different fix competing with it.** The root cause named in the
+original diagnosis was "no mechanism for a particle to get credit across nearby discrete
+hypotheses." Two changes address exactly that, using machinery already built for Section 5a's
+`IG_BALD` joint-entropy fix rather than a new persistent schema field:
+
+1. **Mixture likelihood over local discrete candidates.** `local_candidate_states` (the
+   Section 5a machinery, extracted into a shared `local_candidates.py` so `particle_filter.py`
+   can reuse it without a circular import with `bald.py`) enumerates the small local set of
+   discrete occupation hypotheses each particle's continuous parameters are actually uncertain
+   between, weights them by `softmax(-F/T)`, and scores the particle against that full mixture
+   rather than a single point prediction. A particle just barely on the wrong side of a
+   razor-thin transition boundary now gets partial credit instead of a catastrophic 200-nat
+   penalty.
+2. **Adaptive ESS-targeted likelihood tempering** (standard SMC-sampler technique, not a
+   bespoke patch): per update, find the largest tempering exponent `β ≤ 1` via bisection such
+   that the resulting ensemble ESS doesn't drop below a target fraction (`0.5`) of particle
+   count. This was necessary *in addition to* the mixture likelihood — the mixture fix alone
+   still let a maximally diffuse prior collapse on its very first real measurement, since
+   softening helps a particle near *its own* boundary but not a particle whose entire predicted
+   occupation pattern is simply wrong. Tempering affects only the weight update, not each
+   particle's own Kalman mean/covariance update.
+
+**Both were necessary; neither alone was sufficient** — confirmed by testing incrementally
+(mixture likelihood alone still showed `min_ess=1.0` in 15/15 runs; mixture + tempering fixed
+it) rather than assumed.
+
+**Validated directly against a real 15-run multi-seed sweep** (10/20/40 particles × 5 seeds,
+`stability_sweep.py`, raw results in `sweep_results_tempered.jsonl`):
+- `ESS/n = 0.501` in every single run — hitting the tempering target exactly, not by luck.
+- No more catastrophic single-seed divergence (the worst pre-fix case, 172% error on one
+  parameter, is now a real ensemble with the same seed/settings recovering to reasonable
+  values).
+- For the first time this session, particle count behaves the way theory says it should under
+  a fixed measurement budget: mean error 30.4% → 19.9% → 20.8% going 10 → 20 → 40 particles,
+  with the flattening past 20 consistent with a fixed-information-budget ceiling rather than a
+  filter artifact.
+
+**Correction to a previous primer draft's specific wording:** it stated *"Standard mitigations
+(tempered likelihood, inflated observation covariance, resample-move rejuvenation) would mask
+the collapse, not fix it — agreed these are not the right move here."* That blanket claim is
+now known false as written — it was a judgment call carried forward as if it were a proven
+impossibility result. Tempering, specifically, demonstrably fixes the diagnosed mechanism on
+real data. The corrected framing: a persistent discrete-state schema field *may still be worth
+building eventually* as a more explicit, more directly inspectable architecture — but it is not
+currently required to close the practical gap, since the lighter-weight fix already does,
+verified.
+
+**Status: downgraded from "highest-priority blocking item" to "resolved, verified."** The
+persistent-discrete-state schema redesign moves to the open-items list as a possible future
+architectural cleanup, not a blocker.
+
+**Verification path, for anyone who wants to check this directly rather than trust this
+summary:** `particle_filter.py` (mixture likelihood + `_find_tempering_beta`),
+`local_candidates.py` (shared candidate enumeration), `coarse_sweep.py` (Phase-0 resampling,
+which needed the same fix for the same reason), `run_active_slam.py` (wiring),
+`stability_sweep.py` (the sweep script), `sweep_results_tempered.jsonl` (raw per-run output,
+15 lines).
+
+### 4e. Temperature convention — corrected, and it retroactively affects prior visualization magnitudes
+
+**Bug found and fixed, empirically derived rather than picked by feel:** the only dimensionless
+quantity governing thermal softening is `E_c/(kB·T)`. `E_c=2.1` was chosen purely as a
+feasibility number (Section 4b) with no claim to being a literal energy in eV; `T=0.05` was
+picked as if it meant 50 mK. QArray reads `E_c` as eV regardless of that intent (internally
+computing `kB_T = 8.617333262145e-5 · T` before use — found while porting the Jacobian to JAX,
+Section 4c), so the combination gave `E_c/(kB·T) ≈ 5×10⁵` — a real semiconductor dot sits around
+`100–600` (1–5 meV over 50–300 mK). Result: the simulated device was ~2000× colder than any
+physical one, producing transitions `~9×10⁻¹⁶ V` wide with only ~0.5% of candidates carrying any
+gradient at all.
+
+**Fix: `T≈100` in this project's `E_c` units** reproduces a realistic ratio. **Critical framing,
+required wherever this constant appears:** this is *not* a claim the simulated device sits at
+100 Kelvin — it's a correction for `E_c` itself being an arbitrary feasibility-driven number
+rather than a literal eV value. The physically meaningful quantity is the *ratio*
+`E_c/(kB·T)`, not either factor alone. `T` is a device property here, not a free tuning knob —
+raising it further trades away the discrete charge structure the POMDP is built on (past
+`T≈3000`, transitions smear across ~37% of an addition voltage).
+
+**This means Section 4c's `T ≈ α·σ` recommendation was incomplete, not superseded.** It
+correctly tied `T` to the noise floor but didn't account for `E_c`'s own convention mismatch.
+The full derivation needs both steps: pick `T` so `E_c/(kB·T)` matches a realistic physical
+ratio, *given whatever convention `E_c` is using* — not a single proportionality.
+
+**Also found and fixed in the same pass:** `vg_range=(0,15)` doesn't cover a full addition-
+voltage period (`V_add = 1/α ≈ 16.67V` at this project's `α` — confirmed by direct measurement,
+matching the `1/α` prediction exactly) — part of the state space was unreachable by
+construction.
+
+**Retroactive consequence, real but bounded:** the earlier visualization round's severity
+findings (`IG_FIM` near-zero almost everywhere except isolated single-pixel spikes; the 14-step
+greedy trap) were generated at `T=0.05` — now known to be ~2000× too cold. The *qualitative*
+claim (interdot-only observability, Section 4c) is real physics independent of temperature and
+stands. The *magnitude* of how razor-thin the informative regions appeared may have been
+exaggerated by the unphysical cold rather than being a pure property of the device. **Re-run
+the landscape and trajectory visualizations at corrected `T` and `vg_range` before treating the
+earlier severity numbers as final.**
 
 ---
 
@@ -346,90 +486,76 @@ term gets credit for that jointly, in one evaluation.
   Kalman covariance update is deterministic given `v`, doesn't depend on what's actually
   observed): `IG_FIM(v) = Σᵢ wᵢ · 0.5·[logdet(Σᵢ) − logdet(Σᵢ'(v))]`, where `Σᵢ'(v)` is the
   post-update covariance from the standard Kalman covariance-update equation using the
-  observation-model Jacobian `Hᵢ(v)`. **The `0.5` factor is required** — see Units below; an
-  earlier draft of this section omitted it inconsistently with the Units derivation. If you see
-  a version of this formula without the `0.5`, it's the error, not an alternative convention.
+  observation-model Jacobian `Hᵢ(v)`. **The `0.5` factor is required.**
 - **Aggregation for acquisition purposes is weighted mean, not min/max** — between-particle
   disagreement in current parameter *means* is candidate-independent (doesn't vary with `v`),
   so it's a constant offset that drops out of `argmax_v` entirely. Weighted mean of
   *within*-particle terms is sufficient for choosing where to measure next.
 
+**Candidate proposal — a real, separate gap, found and closed.** Section 5 as originally
+written specifies how to *score* a candidate voltage but never how one gets *proposed* from a
+literal blank start. Confirmed as a real, not hypothetical, gap by a live run: with candidates
+drawn uniformly over the full 4-gate range, `IG_total` scored exactly `0.0` on 18/20 steps,
+because interdot transitions occupy a thin slice of a 4D range that blind uniform sampling
+essentially never lands near. **Fix, implemented: a deterministic Phase-0 bootstrap sweep**
+(`coarse_sweep.py`) — per-gate 1D probes at multiple background settings, implementing Natalia
+Ares's own original expert-input framing (Section 6) literally rather than assuming candidates
+are already reachable. Every point is a real (noisy) measurement fed into the particle filter,
+not a separate diagnostic pass. Detected transitions seed subsequent candidate proposal
+(`candidate_search.py`). "Just draw more random candidates" is not a substitute — the
+probability of a uniform sample landing near a lower-dimensional transition manifold shrinks
+combinatorially with dimension; a deterministic sweep that crosses every gate's full range is
+the only proposal method guaranteed to cross every transition line that gate participates in at
+least once.
+
 ### 5a. `IG_BALD` construction: per-dot marginal sum is a real bug, not just an approximation
 
 **The bug, confirmed against actual behavior:** constructing each particle's "prediction" as 4
-independent per-dot Bernoulli marginals (each dot's fractional occupation from thermal softening,
-treated as `P(dot i in upper state)`), then summing binary entropies across dots, **exactly
-double-counts** joint uncertainty at a clean anti-correlated interdot boundary. Concrete case
-(the same `(1,0)↔(0,1)` transition from Section 4c): true joint entropy is `ln(2)` (one bit —
-did the electron move); summing two identical marginal entropies gives `2·ln(2)` — exactly
-double, not approximately. This is guaranteed by entropy subadditivity (`H(X)+H(Y) ≥ H(X,Y)`,
-equality only under independence), and the bias is **largest exactly at interdot boundaries** —
-per 4c, the only place `E_c` is observable at all, so the acquisition function is most wrong
-exactly where its judgment matters most.
+independent per-dot Bernoulli marginals, then summing binary entropies across dots, **exactly
+double-counts** joint uncertainty at a clean anti-correlated interdot boundary. True joint
+entropy is `ln(2)`; summing two identical marginal entropies gives `2·ln(2)` — exactly double.
+This is guaranteed by entropy subadditivity, and the bias is **largest exactly at interdot
+boundaries** — the only place `E_c` is observable at all.
 
-**Why the fix is cheap, contrary to how it may initially look:** this is a *discrete* joint
-distribution over a small, already-enumerable local state set (e.g. every occupation vector
-within Hamming/L1 distance 1 of a particle's current best-guess state) — not the intractable
-continuous marginalization that got the unified-BALD idea rejected in Section 2. `F(n, vg; θ)`
-is already a known closed-form quadratic in `n`, computable directly from the `Cdd_inv`/`Cgd`
-already built per 4b — no need to expose hidden simulator state. Recipe: enumerate the small
-local candidate set, evaluate `F` at each, `softmax(−F/T)`, compute the true joint entropy from
-that distribution directly. Cheap, closed-form, no sampling.
+**Fix, implemented:** enumerate the small local candidate set, evaluate `F` at each,
+`softmax(−F/T)`, compute the true joint entropy from that distribution directly. Cheap,
+closed-form, no sampling. (This same machinery is what Section 4d's mixture-likelihood fix
+reuses.)
 
-**Consequence for `IG_BALD`'s dynamic-range bound (matters for `w(t)`, see Units below):** the
-per-dot-marginal-sum construction is bounded by `N_DOT·log(2) ≈ 2.77` nats — a *dot-count*-based
-bound, not a *particle-count*-based one. This is a correction to this document's own earlier
-"dynamic range" framing (which incorrectly stated the bound as `log(N_particles)`). Once the
-joint-entropy fix above lands, the bound changes again — a true joint entropy over an enumerated
-local state set is bounded by `log(n_states)` in that set, not `N_DOT·log(2)`. **Re-derive the
-`w(t)` dynamic-range argument only after the joint-entropy fix is in place**, not against either
-of these interim bounds.
+**Consequence for `IG_BALD`'s dynamic-range bound:** the per-dot-marginal-sum construction is
+bounded by `N_DOT·log(2) ≈ 2.77` nats; the joint-entropy fix changes this bound to
+`log(n_states)` in the enumerated local set, not `N_DOT·log(2)` and not `log(N_particles)`
+(both incorrect prior framings). Re-derive `w(t)`'s dynamic-range argument against this
+corrected bound.
 
-### 5b. Greedy single-step selection can trap on a locally-rich, globally-narrow vein — distinct from the zero-IG stall above
+### 5b. Greedy single-step selection can trap on a locally-rich, globally-narrow vein
 
-**Confirmed via a real FIM-only trajectory, not a hypothetical.** This is a *different* failure
-mode from Section 5's already-documented "IG correctly goes to zero when a window is
-uninformative" case — here, `IG_FIM` stayed genuinely **nonzero** for 14 consecutive steps, not
-degenerate at all, and a naive stall-detector watching for `IG≈0` would not have caught it. What
-happened instead: the policy repeatedly re-selected the same candidate point, which had real
-sensitivity to `α1` but — per Section 4c's observability constraint — **exactly zero** sensitivity
-to `E_c1` (same-dot-like point). Result: `α1`'s error collapsed from `6×10⁻⁴` to `~5×10⁻⁶` almost
-immediately, while `E_c1`'s error stayed completely flat for the entire run. The policy found a
-locally-rich, one-dimensional vein of information and had no mechanism to leave it once
-diminishing (but still nonzero) returns kept it locally optimal.
+**Confirmed via a real FIM-only trajectory.** `IG_FIM` stayed genuinely nonzero for 14
+consecutive steps while the policy repeatedly re-selected the same candidate, which had real
+sensitivity to `α1` but exactly zero sensitivity to `E_c1` (same-dot-like point). `α1`'s error
+collapsed almost immediately; `E_c1`'s error stayed flat the entire run. **Note (Section 4e):**
+this trajectory was generated at the unphysically cold `T=0.05` — the qualitative finding
+(greedy trapping is a real failure mode of single-step lookahead) stands independent of
+temperature, but re-run at corrected `T`/`vg_range` before citing the specific 14-step figure.
 
-**Why this matters more than a slow-convergence observation:** a single-step-lookahead greedy
-policy has no structural pressure to seek out interdot boundaries once it's found *some* nonzero
-signal nearby — Section 4c's constraint ("E_c only learnable near interdot boundaries") is a
-statement about where information exists, but nothing in the two-dial acquisition function as
-specified forces exploration toward those regions once a locally-good-enough alternative is
-available. This is a second, independent argument (alongside Section 5's aliasing case) for why
-an outer relocation/diversification mechanism isn't optional polish — it needs to trigger on
-**information becoming narrow** (concentrated in one parameter direction for many consecutive
-steps), not only on **information vanishing** (`IG≈0`). These are different triggers and a
-detector built for one won't catch the other.
+**Why this matters:** a single-step-lookahead greedy policy has no structural pressure to seek
+interdot boundaries once it's found *some* nonzero signal nearby. An outer relocation/
+diversification mechanism needs to trigger on **information becoming narrow** (concentrated in
+one parameter direction for many consecutive steps), not only on **information vanishing**
+(`IG≈0`, Section 5's aliasing case) — two different triggers, still not implemented.
 
 ### Units — resolved, not an invented exchange rate
 
 Both terms are in **nats**, exactly, provided continuous parameters are in **normalized/whitened
-coordinates** (fractional-variance, not raw mixed units like meV vs. dimensionless lever arm):
+coordinates**:
 
 ```
 IG_FIM = 0.5 · [logdet(Σ_prior,normalized) − logdet(Σ_posterior,normalized)]
 ```
 
-This is the literal differential-entropy-reduction formula (`H = 0.5·logdet(2πe·Σ)`, constant
-cancels in the difference) — not an approximation. The normalization requirement is real,
-though: differential entropy is not reparameterization-invariant, so this only holds under a
-fixed, consistent (normalized) parameterization. Worth a runtime assertion, not just a
-one-time design note, in case a parameter gets added later in raw units.
-
-**What normalization does *not* solve:** `IG_BALD` is bounded above (see 5a for the exact bound,
-which depends on which construction is used and is **not** `log(N_particles)`); `IG_FIM`'s
-differential-entropy term is unbounded as posterior covariance shrinks toward a point estimate.
-Same units, different dynamic range — late in Phase 1, `IG_FIM` can numerically swamp `IG_BALD`
-purely from having more headroom. **`w(t)` still has a real job**: not unit conversion (resolved),
-but dynamic-range management between two commensurate-but-differently-bounded quantities.
+**What normalization does *not* solve:** `IG_BALD` is bounded above (Section 5a); `IG_FIM`'s
+differential-entropy term is unbounded as posterior covariance shrinks. `w(t)` still has a real
+job: dynamic-range management between two commensurate-but-differently-bounded quantities.
 
 ---
 
@@ -446,46 +572,21 @@ switching Phase 1 → Phase 2:
 - **Red line — between-particle agreement:** `Cov_i[μᵢ]` (covariance of particle means around
   the grand mean).
 
-**Why both are needed, not just within-particle trace (this was a real bug in an earlier
-version of the design, now fixed):** if all particles started from an identical shared prior,
-each particle's *own* covariance can shrink nicely (mass-based threshold satisfied) while
-particles still substantially disagree with each other about true device scale — a false
-"converged" signal. Law of total covariance: `Σ_total = within + between`. Minkowski's
-determinant inequality (`det(Σ_total)^(1/n) ≥ det(within)^(1/n) + det(between)^(1/n)`) confirms
-a small combined determinant does force both components small — but tracking them as two
-separate thresholds (rather than one combined number) is more debuggable: if the switch
-misfires, the two-line log immediately shows whether it's within-particle overconfidence or
-genuine between-particle disagreement at fault.
+**Why both are needed:** if all particles started from an identical shared prior, each
+particle's *own* covariance can shrink nicely while particles still substantially disagree with
+each other about true device scale — a false "converged" signal. Law of total covariance:
+`Σ_total = within + between`. Tracking them as two separate thresholds is more debuggable than
+one combined number.
 
 **Hysteresis banding**, not a knife-edge: enter Phase 2 when both lines drop below
 `threshold_low`; only revert to Phase 1 if either climbs back above a higher `threshold_high`.
-Prevents chattering near the boundary. Still a clean, loggable, checkable binary switch.
 
-**Aggregation must be mass-based, not simple particle-weighted mean**, for the switch decision
-specifically: switch only once some fraction (e.g. ≥90%) of particle weight has both
-normalized-trace terms below threshold — more conservative, matches the actual claim "belief
-has genuinely converged" rather than "the average happened to cross a line."
+**Aggregation must be mass-based, not simple particle-weighted mean**: switch only once some
+fraction (e.g. ≥90%) of particle weight has both normalized-trace terms below threshold.
 
-**Threshold value derivation:** should come from the simulated sensor-noise model (see 6a), not
-be picked arbitrarily.
+**Threshold value derivation:** should come from the simulated sensor-noise model (Section 6a).
 
 ### 6a. Noise model and threshold derivation — final, corrected form
-
-Went through two rounds of correction before landing here — worth recording the wrong versions
-briefly so they don't get reintroduced.
-
-**`spurious_flip_probability`'s original "worst case" was inverted.** Assuming the true
-occupation sits exactly at an integer level (maximally far from any boundary) is the *best*
-case, not the worst — the genuine worst case is sitting arbitrarily close to a boundary, which
-makes flip probability degenerate toward 0.5 and `N` diverge if taken literally.
-
-**First fix attempt was also wrong, in a different way:** using `sqrt(diag(H·Σ_total·Hᵀ))`
-(parameter-uncertainty-induced predictive spread) *as* the distance-to-boundary conflates two
-distinct things — **epistemic uncertainty** (how much your prediction wobbles because you're
-unsure about parameters) is not **positional distance** (where your current best-estimate
-prediction actually sits relative to a transition line). A confident-but-wrong particle sitting
-exactly on a transition would be misclassified "safe" under this formula; an uncertain particle
-deep in a stable plateau would be misclassified "risky" — backwards in both directions.
 
 **Correct, final form** — distance from the mean estimate (a deterministic, positional fact),
 with the covariance term correctly redeployed as noise *inflation*, not distance substitute:
@@ -496,36 +597,92 @@ sigma_eff(v*)² = R + diag(H·Σ_total·Hᵀ)                    # sensor noise 
 p_flip = P(|noise| > distance_to_boundary),  noise ~ N(0, sigma_eff²)
 ```
 
-Preserves the one thing worth keeping from the rejected attempt: `sigma_eff` never collapses to
-pure sensor noise (`Σ_total` is never exactly zero), so the original degeneracy still dissolves.
+**Must use `Σ_total` (within + between, Section 6), not a single particle's own `Σ`.**
 
-**Must use `Σ_total` (within + between, Section 6), not a single particle's own `Σ`** — using
-within-particle `Σ` alone would reintroduce the exact overconfidence failure mode the Section 6
-red-line fix exists to catch, in a new location.
+**Dimensionality — flagged, not yet resolved:** per-dot vector combined via a union bound, or
+collapsed to one scalar? Not yet decided.
 
-**Dimensionality — flagged, not yet resolved by the design above:** with 4 dots, is
-`distance_to_boundary`/`sigma_eff` a 4-vector (per-dot), combined via e.g. a union bound
-(`P(any dot flips) ≤ Σᵢ P(dot i flips)`), or collapsed to one scalar? `GaussianReadoutNoise`'s
-docstring implies per-dot was the original intent; confirm this explicitly wherever the fix is
-implemented, don't assume it falls out correctly by default.
+**Threshold-derivation formula:** `Σ_floor ≈ (HᵀR⁻¹H)⁻¹` is not well-posed as a single-shot
+formula (`H` is `4×5`, rank ≤4 against 5 parameters from any single query — generically
+singular). **Adopted resolution: empirical calibration** — run a batch of deliberately-
+informative measurements offline, read off the achieved `logdet(Σ)`, use that as
+`threshold_low`'s reference scale. `threshold_low` is a function of
+`(sigma, particle_count, prior_width)`, not a universal constant — recompute per experiment
+configuration.
 
-**Threshold-derivation formula, corrected:** `Σ_floor ≈ (HᵀR⁻¹H)⁻¹` (Fisher-information-style
-parameter-covariance floor implied by a given readout-noise level) is **not well-posed as a
-single-shot formula**, confirmed by direct dimension count independent of the `t_c` question:
-`H` is `4×5` (4 discrete readout dimensions, 5 tracked continuous parameters post-4a), so
-`HᵀR⁻¹H` has rank ≤4 against 5 parameters from *any single query* — generically singular
-regardless of what's in the state vector. (An earlier version of this reasoning claimed dropping
-`t_c` alone made this "well-posed" — that was overstated; dropping `t_c` removes one
-structurally-zero column, it doesn't fix this separate, unavoidable rank deficiency.)
+### 6b. Goal-directed policy — structural gap real; active-vs-raster claim now independently verified (with corrected numbers); goal-directed-criterion claim still unverified
 
-**Adopted resolution: empirical calibration, not a closed-form floor.** Run a batch of a few
-hundred simulated, deliberately-informative measurements offline, read off the achieved
-`logdet(Σ)`, use that as `threshold_low`'s reference scale. Reuses existing simulation
-machinery rather than requiring a new idealized-optimal-query-sequence optimization (which
-would itself be a non-trivial project). **The resulting `threshold_low` is a function of
-`(sigma, particle_count, prior_width)`, not a universal constant** — recompute per experiment
-configuration (varies across the coupling-strength sweep, Section 7a), don't treat one
-calibration run as valid for the whole sweep.
+**What actually checks out by inspection, independent of any run:** Section 5's acquisition
+function, `IG_total(v) = w_d·IG_BALD(v) + w_c·IG_FIM(v)`, is purely information-maximizing —
+nothing in that formula rewards proximity to a target occupation. Section 8's convergence
+criterion presupposes goal-directed behavior (it checks belief mass *on a target* and
+actuation quiescence *near that target*). This is a real, checkable-by-reading structural gap
+between two sections of this primer, and stands regardless of everything below.
+
+**A previous primer draft asserted two specific empirical claims from another session's
+narrative summary with unwarranted confidence** ("Holds — validated directly," with no
+corresponding script or result file traceable in this project's actual codebase at the time —
+the same failure mode as a fabricated docstring quote caught earlier in this project's history,
+just harder to catch because it read as careful, hedged analysis). Both have now been checked
+against real, independently-supplied artifacts, with two different outcomes:
+
+**Claim A — "6-seed active-vs-raster belief-covariance comparison" — now independently
+verified, original numbers superseded.** The originating session supplied the actual script,
+raw per-seed JSON traces, and a snapshot of the exact code state used, packaged specifically so
+it could be checked rather than trusted (consistent with this project's own standing policy).
+Checking the snapshot directly confirmed its own stated caveat: it predates the Section 4d
+discrete-state fix, the Section 4c JAX Jacobian, and the Section 4e temperature correction —
+`T=0.05` throughout, no mixture-likelihood/tempering machinery in `particle_filter.py`, no
+JAX Jacobian module present. The comparison was then re-run directly against this project's
+current code, in two stages:
+- **Stage 1 — isolate just the 4d fix** (same `T=0.05`, same `vg_range` as the original run,
+  tempering explicitly engaged): the dramatic gap **essentially vanished** — `0.08, 0.61, 0.74,
+  0.00, -0.00, -0.00` across the 6 seeds, versus the original claim's `14.07` to `42.96`. This
+  directly confirms the concern the originating session itself raised: the original result was
+  substantially an artifact of the since-fixed discrete-state collapse, not a clean measurement
+  of the active policy's advantage.
+- **Stage 2 — fully current pipeline** (`T=100`, corrected `vg_range`, 4c/4d/4e all engaged): a
+  real, positive, 6/6-consistent gap reappears — `10.12, 17.16, 6.72, 6.89, 10.84, 8.57`, mean
+  ≈10. Active genuinely does beat raster under the trustworthy configuration — about 2.5×
+  smaller than the original inflated claim (mean gap ≈25 → ≈10), consistent with the original
+  effect being partly real signal and partly collapse artifact.
+
+**Conclusion: Claim A holds, with corrected numbers.** Cite "active exploration reduces belief
+uncertainty faster than raster, consistently across 6 seeds, mean gap ≈10 in normalized
+log-covariance units, verified against the current pipeline" — not the original ≈25 figure.
+Scripts and raw JSON for both stages are checked in alongside `stability_sweep.py`, same
+verification standard.
+
+**Claim B — "an attempt to build a goal-directed convergence criterion broke" — still
+unverified.** This session's re-run checked only the belief-covariance comparison (Claim A).
+No script, implementation attempt, or trace for the goal-directed-criterion claim has been
+supplied or checked. It remains reported-by-another-session, not independently verified, and
+should not be cited as settled. If the actual attempted implementation is supplied, it can be
+checked the same way Claim A was.
+
+**Process note worth keeping:** this is a case where "verify, don't debate" produced a more
+interesting and more useful answer than either "the claim was right" or "the claim was wrong"
+would have been — the original number was found to be part real effect, part artifact, and the
+corrected, defensible number is now stronger evidence than an unchecked claim could ever be,
+specifically because it survived an adversarial re-test.
+
+**The fix proposal itself (hard-switch to MAP-navigation once Section 6's phase-switch
+triggers) remains a reasonable, low-risk design sketch** — it doesn't depend on Claim B being
+true, only on the structural gap (which does check out) being real. It should be treated as an
+unbuilt proposal, not as validated by a test that still can't be traced to real code.
+
+**Explicitly rejected regardless of the above: importing the parent pipeline's navigation
+stage (`bayesian_opt.py`, `MultiResBO`) to "close the loop."** Two independent reasons: it's
+exactly the GP/BO mechanism Claim 3 exists to avoid, and it's structurally mismatched
+regardless — it consumes an already-coarsely-localized starting point, never built to take a
+joint particle-filter-plus-per-particle-Kalman belief as input.
+
+**Sequencing, updated:** the original blocker on this section (Section 4d's discrete-state fix
+needing to land first, since the MAP estimate wasn't trustworthy) is resolved — 4d is now
+verified fixed. This section's own blocker is now purely the unverified empirical claims above,
+not a dependency on other unfinished work. If the active-vs-raster and goal-directed-criterion
+results can be reproduced against real code, this section can move forward; until then, treat
+it as an open design sketch, not a diagnosed-and-agreed fix.
 
 ---
 
@@ -542,21 +699,14 @@ regime as an externally-calibrated reference for what counts as "strong" cross-t
 **(b) Prior seeding, within any single run:** the coupling term specifically needs a
 **stratified draw** across particles (some particles seeded near-zero, some moderate, some
 strong coupling hypotheses) — NOT a shared diffuse Gaussian prior identical across all
-particles. Reason: if all particles share an identical prior, continuous-parameter diversity
-only emerges from particles disagreeing about *discrete* transitions (data-association
-divergence) — which can stay degenerate early on (exactly when BALD is near-flat, the primer's
-documented aliasing failure mode), silently gutting the between-particle (`red line`, Section 6)
-diagnostic before it has anything real to catch. Coupling specifically (not necessarily other
-continuous parameters) warrants this because zero is a real, physically plausible, interesting
-hypothesis boundary — unlike `E_c`, which is always positive and bounded away from zero by
-construction.
+particles. Coupling specifically warrants this because zero is a real, physically plausible,
+interesting hypothesis boundary — unlike `E_c`, which is always positive and bounded away from
+zero by construction. **Implemented:** `particle_init.py`'s `CouplingStratum`/
+`init_particle_filter`.
 
 **Methodological invariant — do not violate:** the prior scheme from (b) must be **identical
 across every point in the sweep from (a)**, regardless of what true coupling value that run is
-actually testing. Narrowing the prior based on knowledge of the ground truth (even
-unintentionally, e.g. reusing a prior "tuned while debugging on one test device") would mean
-testing "recovery when the prior happens to bracket the truth" rather than genuine ground-zero
-recovery — this would undermine Claim 1, not just Claim 2.
+actually testing.
 
 ---
 
@@ -566,104 +716,68 @@ recovery — this would undermine Claim 1, not just Claim 2.
 - **A — statistical false positive:** a noisy measurement momentarily favors `(1,1,1,1)`, next
   reading swings back. Artifact of observation noise.
 - **B — genuine physical perturbation:** navigating DQD-2 shifts DQD-1's chemical potential via
-  the cross-term enough to actually change its occupation (real, in-scope consequence of not
-  building virtual-gate compensation — see Section 2).
+  the cross-term enough to actually change its occupation.
 
 **Dual criterion, both required, sustained for `N` consecutive steps:**
 1. **Belief stability** (guards A): posterior mass on joint MAP `(1,1,1,1)` exceeds confidence
    threshold `p_conf`.
 2. **Actuation quiescence** (guards B): the policy's own chosen step magnitude drops below `ε`
-   on **any** gate, not just ones near target — reuses the acquisition function's own output as
-   the signal, no new machinery. If DQD-2 is still being actively navigated, its cross-term is
-   still a live risk to DQD-1, so DQD-1 isn't safe to call "done" yet even if it's momentarily
-   at target.
+   on **any** gate. **Implemented:** `convergence.py`'s `ConvergenceMonitor`.
 
-**`N` derivation:** don't pick arbitrarily — trades directly against the headline efficiency
-metric (too small = noise-inflated results that won't replicate; too large = burns the
-measurements the paper is trying to show aren't needed). Derive via the simulated sensor-noise
-model: smallest `N` such that `P(N consecutive spurious "stable" reads by chance) < p` for some
-small target `p` (e.g. 0.01) — same principled-threshold logic as the Section 6 phase-switch
-fix, not new machinery.
+**`N` derivation:** smallest `N` such that `P(N consecutive spurious "stable" reads by chance)
+< p` for some small target `p`.
 
-**Fairness requirement for the baseline comparison (protects Claim 1's credibility directly):**
-the raster baseline must use a **comparably rigorous stopping rule** — not "scan the full
-deterministic grid" for the baseline vs. "stop early once probabilistically confident" for the
-SLAM method, which would compare two different definitions of "done." Give the baseline the
-same belief-confidence-threshold stopping rule, fed by raster-order measurements instead of
-IG-chosen ones, so the comparison is measurements-to-*equivalent-confidence*.
+**Fairness requirement for the baseline comparison:** the raster baseline must use a
+**comparably rigorous stopping rule**, fed by raster-order measurements instead of IG-chosen
+ones.
 
 **Reportable, not hideable, result:** if failure-mode-B perturbation turns out severe at high
-coupling strength (particles keep getting knocked out, actuation never quiesces), that's a real
-boundary of the method worth reporting directly, tied to Claim 2's coupling-strength sweep —
-"clean convergence in regime X, cross-term perturbation requiring virtual-gate compensation
-(deliberately out of scope) becomes necessary beyond regime Y" is a stronger, more honest result
-than tuning `N` to paper over it.
+coupling strength, that's a real boundary of the method worth reporting directly.
 
 ---
 
-## 9. Verified computational facts (QArray, benchmarked directly — not projected)
+## 9. Verified computational facts (QArray, benchmarked directly)
 
 Environment: `pip install qarray --break-system-packages` (v1.6.0), `implementation='rust'`,
 4-dot/4-gate `DotArray`, `max_charge_carriers=None`.
 
-- **`DotArray.ground_state_open(vg)`** — the point-query method. Takes `(..., n_gate)` array,
-  returns `(..., n_dot)` ground-state occupations. Works for single point or batch.
-- **`DotArray.update_capacitance_matrices(Cdd, Cgd)`** — swaps device-parameter hypothesis on
-  an existing model instance (needed once per particle per step, since each particle's Kalman
-  filter carries its own continuous-parameter estimate).
 - **Single-point loop (naive, one call at a time):** ~26 µs/call.
-- **Batched query, floors at batch size ≳50:** ~14.3 µs/point — only ~1.8× speedup over naive
-  looping, *not* the 10–50× the parent pipeline's bottleneck comment hoped for (that number was
-  likely benchmarked against a slower hand-written CIM, not against what QArray specifically
-  buys you).
-- **Per-particle capacitance-matrix swap cost:** ~270 µs/particle — comparable in magnitude to
-  a full 50-point candidate batch (~715 µs). **This dominates the per-step cost, not the
-  candidate query** — particle count, not candidate/MC-sample count, is the real lever on
-  compute budget.
-- **Realistic full decision-step cost:** 200 particles × 50 candidates (swap + batched query
-  per particle) = **~197 ms/step**. At QADAPT-comparable convergence scales (tens to low
-  hundreds of steps), full ground-zero runs are affordable in seconds-to-tens-of-seconds —
-  no architecture change forced by this benchmark.
-- **Not yet checked:** whether the `implementation='jax'` path does better specifically on the
-  swap-heavy access pattern — reasonable to defer until particle count actually needs to push
-  past what's comfortable at these numbers.
+- **Batched query, floors at batch size ≳50:** ~14.3 µs/point.
+- **Per-particle capacitance-matrix swap cost:** ~270 µs/particle — dominates per-step cost,
+  not the candidate query.
+- **Realistic decision-step cost estimate:** 200 particles × 50 candidates ≈ 197 ms/step at
+  that scale.
 
-**OPEN — flagged during acquisition-module code review, not yet confirmed either way:** this
-benchmark measured `update_capacitance_matrices()` on a **persistent** `DotArray` instance. Early
-`bald.py`/`fim.py` implementations construct a **fresh** `QArrayEnv(params)` per particle per
-call inside the acquisition loop. If `QArrayEnv.__init__` runs the full construction pipeline
-from scratch rather than reusing a persistent instance + swap, real per-step cost could be
-meaningfully higher than the ~197ms/step figure above, and if `bald.py` and `fim.py` each
-independently reconstruct rather than sharing one instance per particle, that cost is paid
-twice. **Confirm before trusting the 197ms/step figure at scale**: does the particle filter hold
-one persistent `QArrayEnv`/`DotArray` per particle, reused via `update_capacitance_matrices` by
-both acquisition terms — or does each call to `soft_prediction`/`observation_jacobian`
-reconstruct fresh?
+**RESOLVED — the "fresh QArrayEnv per particle per candidate" question, confirmed real and
+fixed.** Early `bald.py`/`fim.py` implementations did reconstruct fresh per call inside the
+acquisition loop — confirmed via direct code read. Fixed: `candidate_search.py`'s
+`build_particle_envs` builds one `QArrayEnv` (and self-capacitance warm-start) per particle
+*once per acquisition step*, reused across every candidate in that step's batch and handed
+through to the subsequent belief update so it isn't solved a third time either.
+
+**Not yet checked:** whether `implementation='jax'` does better on the swap-heavy access
+pattern at higher particle counts than currently tested (10–40).
 
 ---
 
-## 10. QADAPT (arXiv:2607.09422) — key facts to reuse, verified directly (not secondhand)
+## 10. QADAPT (arXiv:2607.09422) — key facts to reuse, verified directly
 
 De Nicolo, Marchand, Carlsson, Vaidhyanathan, Ares (Oxford, July 2026). Simulates using QArray.
-Confirmed real by direct fetch of the paper **and** independently by the user having attended
+Confirmed real by direct fetch of the paper and independently by the user having attended
 Natalia Ares's presentation of these results in person.
 
-- **Benchmarked joint GP-based Bayesian optimization** (architecturally the same as the parent
-  pipeline's `bayesian_opt.py`) and found it "suffers greatly," showing catastrophic slowdown
-  in convergence beyond 4 dots — attributed to cubic complexity with accumulated observations.
-  **Four dots is exactly this project's scale** (two coupled DQDs).
-- **Their actual architecture does not solve the joint problem jointly** — instead, decouples
-  agents via a learned factored action-space representation: a Kalman filter incrementally
-  estimates the cross-capacitance matrix Φ online (a real, independently-corroborating precedent
-  for "estimate coupling via Kalman filter, don't assume it"), then executes **decoupled**
-  per-gate control in the resulting virtualized basis.
+- **Benchmarked joint GP-based Bayesian optimization** and found it "suffers greatly,"
+  catastrophic slowdown beyond 4 dots — attributed to cubic complexity with accumulated
+  observations. **Four dots is exactly this project's scale.**
+- **Their actual architecture does not solve the joint problem jointly** — decouples agents via
+  a learned factored action-space representation: a Kalman filter incrementally estimates the
+  cross-capacitance matrix Φ online, then executes **decoupled** per-gate control in the
+  resulting virtualized basis.
 - **Ablation:** removing the Kalman-filtered virtualization drops convergence from ~93–95% to
-  ~10–89% depending on threshold strictness — empirical validation that online coupling
-  estimation is load-bearing, not optional.
+  ~10–89% — online coupling estimation is load-bearing, not optional.
 - **Not a ground-zero comparison** — QADAPT is trained via RL across many episodes with
-  randomized device parameters, then zero-shot transferred; a very different assumption regime
-  than this project's single-run, no-training-data ground-zero claim. Cite as related work and
-  as the source of the GP-wall benchmark; don't present as a directly comparable baseline.
+  randomized device parameters, then zero-shot transferred. Cite as related work and as the
+  source of the GP-wall benchmark; don't present as a directly comparable baseline.
 
 ---
 
@@ -671,109 +785,109 @@ Natalia Ares's presentation of these results in person.
 
 **Parent pipeline** (reference only, per Section 2): `C:\Users\ual-laptop\Documents\Agentic-Semiconductor-Quantum-Device-Tuning`
 
-**This project's actual code** (confirmed via direct directory listing — lives as a genuinely
-separate project, correctly *not* nested inside the parent pipeline's own package structure):
+**This project's actual code:**
 `C:\Users\ual-laptop\Documents\Agentic-Semiconductor-Quantum-Device-Tuning\qdot-slam-pomdp\src\gz_tuning\`
-— contains `acquisition/` (`bald.py`, `fim.py`, `two_dial.py`), with `qarray_env.py`,
-`particle_filter.py`, `kalman.py`, `noise_model.py` as sibling modules referenced throughout
-this primer.
-
-**Useful as pattern/inspiration only** (re-derive for this project's joint 4-dot case, don't
-copy wholesale):
-- `belief.py` (`_ParticleSet`, `BeliefUpdater`) — particle-filter structure for occupation
-  states. This project's version needs joint `(n1,n2,n3,n4)` and per-particle Kalman filters
-  layered on top (Section 4) — a real extension, not a drop-in reuse.
-- `sensing.py` (`ActiveSensingPolicy._estimate_ig`) — BALD-style IG estimation approach. Same
-  caveat: this project's `IG_BALD` term is the discrete half of a two-dial design, not the
-  whole acquisition function, and needs to operate over the joint 4D candidate space.
+— `qarray_env.py`, `qarray_jax.py`, `kalman.py`, `particle_filter.py`, `local_candidates.py`,
+`noise_model.py`, `particle_init.py`, `convergence.py`, `acquisition/` (`bald.py`, `fim.py`,
+`two_dial.py`, `candidate_search.py`), `coarse_sweep.py`, `run_active_slam.py`,
+`baselines/raster_scan.py`.
 
 **Do NOT import:**
 - `state_machine.py` — 6-stage orchestrator, HITL escalation, backtracking, DQC gatekeeper,
-  governance logging. Confirmed via direct read to assume a scale-informed window from the
-  start (via `physics.py`'s `coulomb_window`), exactly what ground-zero can't assume.
-- `bayesian_opt.py` (`MultiResBO`) — GP/BO navigation, explicitly rejected (Section 2).
-- `physics.py`'s `coulomb_centre()` — contains the documented wrong-sign formula
-  (`-E_c_mean/lever`), kept there only as a flagged-inferior fallback. Useful as a primary
-  source for the sign-bug cautionary tale (Section 2), not as usable code.
+  governance logging. Assumes a scale-informed window from the start, exactly what ground-zero
+  can't assume.
+- `bayesian_opt.py` (`MultiResBO`) — GP/BO navigation, explicitly rejected (Section 2, 6b).
+- `physics.py`'s `coulomb_centre()` — contains the documented wrong-sign formula.
 - Any device-parameter values treated as fixed/known inputs to `CIMObservationModel` — this
-  project estimates them live (Section 4), that's a structural difference from how the parent
-  pipeline uses them.
+  project estimates them live (Section 4).
 
 ---
 
 ## 12. Still open — carry into the coding chat, not yet resolved here
 
-- **JAX-autodiff Jacobian rewrite (Section 4c)** — status upgraded to highest priority: the
-  adaptive-step FD stopgap is confirmed working but confirmed insufficient near sharp/close-call
-  candidates, and real acquisition landscapes are dominated by exactly that regime. Needed before
-  trusting any `IG_FIM`-driven candidate choice, not deferred polish.
-- **Outer relocation/diversification trigger (Sections 5, 5b)** — now confirmed needed for *two*
-  distinct failure modes with different signatures (IG→0 aliasing vs. narrow-but-nonzero greedy
-  trapping); a detector needs to catch both, not just the zero case.
-- **Exact stratification scheme** for coupling-term particle seeding (Section 7b) — range,
-  distribution shape, number of strata — not yet numerically specified.
-- **`p_conf`/`ε` derivation** — `N`'s derivation logic is now fully settled (Section 6a); `p_conf`
-  and `ε` (Section 8) still need equivalent treatment.
-- **Distance-to-boundary dimensionality** (Section 6a) — per-dot vector with union bound, or
-  single scalar? Not yet decided.
-- **QArrayEnv reconstruction-vs-swap performance question** (Section 9) — confirm before trusting
-  the 197ms/step figure at the particle counts actually used.
-- **`w(t)` dynamic-range schedule** (Section 5a) — re-derive only after the `IG_BALD`
-  joint-entropy fix lands; the correct bound to design against isn't settled until then.
-- **`algorithm='default'` vs. `brute_force` at 3+-state near-degenerate points** (Section 4b) —
-  500-point spot check found zero disagreement but didn't cover triple points specifically; one
-  targeted check needed before treating the condition-number warning as fully resolved.
-- **JAX vs. rust QArray implementation** at higher particle counts, if/when needed (Section 9).
-- **QArray+ public release** (Section 3) — check periodically; would resolve `t_c` non-
-  identifiability structurally if it lands before the writing phase.
-- **`raster_scan.py`'s actuation-quiescence signal** — flagged as likely non-functional on a real
-  (non-repeated-point) grid: using the next *scheduled* grid point's displacement as the
-  quiescence proxy will almost always exceed a noise-floor-scale `epsilon`, meaning the baseline
-  can only converge in its final `N` steps regardless of true belief confidence. Needs a decision
-  between guard-A-only for the baseline (matches Section 8's literal phrasing) or a redefined
-  guard-B signal computed from the raster's accumulated belief rather than its fixed schedule —
-  not yet resolved.
-- **`belief_stable`/`target_occupation_mass` ignoring each particle's own `Σᵢ`** — currently uses
-  only the rounded mean estimate, which could mask genuine uncertainty right at the interdot
-  transitions where it matters most (same failure shape as the boundary-distance and blue-line
-  fixes already caught twice elsewhere) — needs a look once `particle_filter.py` is available for
-  review.
-- **Two verification-hygiene items, not yet closed:**
-  1. The claim "no one has published literal SLAM applied to ground-zero QD tuning" (surfaced
-     via Gemini) needs the same independent literature check the rest of related work already
-     got — flagged twice in discussion, not yet done.
-  2. A final pass cross-referencing this project's related-work list against QADAPT's own
-     citations, to catch anything relevant QADAPT surfaces that wasn't independently found.
+**Highest priority:**
+- **Re-run Section 4c/5's landscape and trajectory visualizations** at corrected `T≈100` and
+  full `vg_range` (Section 4e) — the earlier `IG_FIM`-near-zero and 14-step-trap *magnitudes*
+  are provisional until regenerated; the *qualitative* interdot-observability finding stands.
+- **Goal-directed policy layer (Section 6b)** — the active-vs-raster evidence blocking this is
+  now resolved (independently re-verified, corrected numbers in). Still blocked on the
+  goal-directed-criterion claim, which remains unverified — supply the actual attempted
+  implementation to check it the same way. The structural gap and fix proposal are real and
+  ready to build once that's resolved.
+- **Verify Chat IV's (this session's) own claims get the same scrutiny going forward** —
+  general process note, not a specific item: this round caught one fabricated quote and one
+  overstated blanket claim from cross-chat narrative summaries. Any claim entering the primer
+  from outside this session's own verified code/data should be marked provisional until checked
+  the same way.
 
-**Resolved since the last version of this primer** (kept here briefly as a changelog, not a
-to-do): the E_c/Cdd mapping and factor-of-2 (4b), the `t_c` non-identifiability finding and drop
-decision (4a), the interdot-observability finding (4c), the boundary-distance/`sigma_eff`
-derivation through two rounds of correction (6a), the empirical-calibration decision for
-`threshold_low` (6a), the analytic-Jacobian-over-finite-difference decision (4c), the `IG_BALD`
-joint-entropy bug identification (5a), the `IG_FIM` 0.5-factor discrepancy (5), the QArray+ paper
-review (3), **the ground-truth `(E_c, α)` feasibility sweep — now closed with real numbers
-(`α≈0.05–0.075`, `E_c≈2.0–2.2`), confirmed via actual `QArrayEnv` construction (4b)**, and the
-FD-saturation bug's magnitude, confirmed and quantified via real sweep (4c).
+**Everything below is unchanged in substance:**
+- **Outer relocation/diversification trigger (Sections 5, 5b)** — needed for two distinct
+  failure signatures (IG→0 aliasing vs. narrow-but-nonzero greedy trapping). Not yet built.
+- **Exact stratification scheme** for coupling-term particle seeding (Section 7b) — range,
+  distribution shape, number of strata not yet numerically specified beyond current defaults.
+- **`p_conf`/`ε` derivation** — `N`'s derivation is settled (Section 6a); `p_conf`/`ε`
+  (Section 8) still need equivalent treatment.
+- **Distance-to-boundary dimensionality** (Section 6a) — per-dot vector vs. single scalar, not
+  yet decided.
+- **`w(t)` dynamic-range schedule** (Section 5a) — needs re-derivation against the corrected
+  joint-entropy bound; currently run with fixed equal weights as a placeholder.
+- **`algorithm='default'` vs. `brute_force` at 3+-state near-degenerate points** (Section 4b) —
+  500-point spot check passed but didn't cover triple points specifically.
+- **QArray+ public release** (Section 3) — check periodically.
+- **`raster_scan.py`'s actuation-quiescence signal** — likely non-functional on a real
+  (non-repeated-point) grid; needs a decision between guard-A-only or a redefined guard-B
+  signal.
+- **Persistent discrete-state schema field** (downgraded from Section 4d, no longer blocking)
+  — worth considering as a future architectural cleanup for explicit inspectability, not
+  currently required.
+- **Full-scale run** (200 particles, primer's original target) — not yet attempted; current
+  validated runs are at 10–40 particles. JAX Jacobian rewrite (4c) makes this more tractable
+  than the FD version would have been, but per-step cost at 200 particles × 50 candidates has
+  not yet been re-benchmarked with the analytic Jacobian in place.
+- **Claim 2's actual coupling-strength sweep and naive-decoupled baseline comparison** — not
+  yet run; current work has focused on getting the single-run estimator itself trustworthy
+  first.
+- **Verification-hygiene:** confirm the "Nature Electronics" venue for Schuff et al.
+  (Section 1) before citing it that specifically; a final pass cross-referencing this project's
+  related-work list against QADAPT's own citations.
+
+**Resolved since the last version of this primer** (changelog): the discrete-occupation-state
+collapse, diagnosed *and* fixed *and* validated (4d, superseding the earlier "fix agreed, not
+yet implemented" status); the feasibility-boundary hypothesis for particle divergence, tested
+and refuted (4d); the analytic JAX Jacobian rewrite, done and validated against the real rust
+backend (4c); the temperature-convention bug and `vg_range` coverage gap, fixed (4e); the
+Section 5 candidate-proposal gap (deterministic Phase-0 sweep), fixed; the
+fresh-QArrayEnv-per-candidate performance risk (Section 9), confirmed real and fixed; the
+Schuff et al. citation, confirmed real (venue unconfirmed); Section 4d's blanket dismissal of
+likelihood tempering, corrected after direct testing falsified it. **New this round:** Section
+6b's active-vs-raster claim, independently re-verified against real supplied artifacts (script,
+raw traces, code snapshot) and re-run directly against the current pipeline — original numbers
+found to be ~2.5× inflated by the (now-fixed) 4d collapse bug, corrected numbers (mean gap ≈10,
+6/6 seeds) now stand as genuine evidence for Claim 1. Section 6b's *other* empirical claim
+(goal-directed-criterion failure) remains open — not yet supplied for checking, still marked
+unverified rather than settled.
 
 ---
 
 ## 13. One process note worth carrying forward
 
-Multiple design proposals in this project originated from consulting Gemini. Several were
-genuinely useful (the "map = interaction matrix" reframing, independently corroborated by
-QADAPT's own Φ-matrix architecture; the sparse-information-matrix instinct, correct once
-redirected at the continuous parameters rather than the discrete particle filter). Others were
-overclaimed or structurally mismatched to this project's actual state representation (the
-"loop-closure for hysteresis" framing; a literal sparse-information-matrix swap applied to a
-discrete, non-Gaussian particle filter, which doesn't type-check). The pattern that worked:
-treat LLM-sourced proposals as hypotheses to be checked against the actual physics/math/code,
-not adopted on the strength of how principled they sound. Worth maintaining the same posture
-in the code chat, especially for anything that comes from a source other than this primer.
+Multiple design proposals in this project originated from consulting other chats/models.
+Several were genuinely useful; others were overclaimed or structurally mismatched to this
+project's actual state representation. The pattern that worked, and that this round
+reconfirmed under harder conditions than before: treat proposals — and summaries of what
+another session found — as hypotheses to be checked against the actual physics/math/code, not
+adopted on the strength of how principled or careful they sound. This round specifically showed
+that careful, hedged prose is not a safe signal to relax scrutiny on: a fabricated docstring
+quote and an unverified "6-seed comparison, holds — validated directly" both made it into a
+primer draft before being caught, and the second one specifically got through *because* it read
+as measured analysis rather than a flashy claim. The fix each time was the same one this project
+has used from the start: go read the actual file, run the actual sweep, check the actual number
+— not re-reason about which summary sounds more credible.
 
-**This kept proving out during implementation, not just design** — several fixes in this
-document (the capacitance-matrix factor-of-2, the boundary-distance formula, the `IG_BALD`
-bound claim) went through multiple wrong-then-corrected rounds *between the two chats*, each
-catch coming from checking a claim against actual running code or source rather than trusting
-the previous round's reasoning. That back-and-forth is working as intended — treat a primer
-claim surviving one round of "sounds right" as provisional, not final, until it's been checked
-against real behavior at least once.
+**Worth noting the outcome isn't always "debunked" — sometimes it's "partly right, now
+stronger."** When the active-vs-raster claim's originating session supplied its actual script,
+raw data, and code snapshot rather than just a narrative summary, checking it directly didn't
+just confirm or deny the claim — it separated a real effect from a collapse-bug artifact that
+had been inflating it, and the corrected number is more defensible than the original unchecked
+one could ever have been. The lesson isn't "distrust other sessions" — it's that verification
+against real artifacts is what makes a claim usable at all, in either direction.
