@@ -10,6 +10,7 @@ from particle_filter import OccupationParticle, RBParticleFilter
 from phase_switch import (
     Phase,
     PhaseSwitchController,
+    elect_champion,
     within_particle_mass_fraction_below,
 )
 
@@ -56,6 +57,28 @@ class TestWithinParticleMassFractionBelow:
         assert fraction < 1.0
 
 
+class TestElectChampion:
+    def test_picks_highest_weight_particle(self):
+        p_low = _particle(BASE_MU, sigma_scale=1e-6, weight=0.1)
+        p_high = _particle(BASE_MU + 0.01, sigma_scale=1e-6, weight=0.7)
+        p_mid = _particle(BASE_MU - 0.01, sigma_scale=1e-6, weight=0.2)
+        pf = RBParticleFilter(particles=[p_low, p_high, p_mid])
+        assert elect_champion(pf) is p_high
+
+    def test_is_not_a_weighted_mean(self):
+        # Two well-separated, comparably-weighted hypotheses: a weighted
+        # mean would land between them, at a point neither particle
+        # actually represents. elect_champion must return one of the
+        # real particle objects, not a synthesized average.
+        p_a = _particle(BASE_MU, sigma_scale=1e-6, weight=0.51)
+        p_b = _particle(BASE_MU + 5.0, sigma_scale=1e-6, weight=0.49)
+        pf = RBParticleFilter(particles=[p_a, p_b])
+        champion = elect_champion(pf)
+        assert champion is p_a
+        mean_mu = pf.weighted_mean_mu()
+        assert not np.allclose(champion.kalman.mu, mean_mu)
+
+
 class TestPhaseSwitchControllerValidation:
     def test_rejects_bad_threshold_order(self):
         with pytest.raises(ValueError):
@@ -69,12 +92,14 @@ class TestPhaseSwitchControllerValidation:
 
 
 class TestPhaseSwitchHysteresis:
-    def _population(self, sigma_scale, mu_jitter):
+    def _population(self, sigma_scale, mu_jitter, weights=None):
         rng = np.random.default_rng(0)
         particles = []
-        for _ in range(8):
+        n = 8
+        for i in range(n):
             jitter = rng.normal(scale=mu_jitter, size=N_PARAMS) if mu_jitter else 0.0
-            particles.append(_particle(BASE_MU + jitter, sigma_scale, weight=1.0))
+            w = weights[i] if weights is not None else 1.0
+            particles.append(_particle(BASE_MU + jitter, sigma_scale, weight=w))
         return RBParticleFilter(particles=particles)
 
     def test_starts_in_phase_1(self):
@@ -116,3 +141,86 @@ class TestPhaseSwitchHysteresis:
         diag = controller.step(regressed_pf)
         assert controller.phase is Phase.PHASE_1_RAW_SIGNAL
         assert diag.blue_mass_fraction_below_high < 0.9
+
+
+class TestChampionElectionLifecycle:
+    """Section 6b: champion identity tracking through the controller's
+    step() -- election on Phase 1 -> 2 entry, stability across steps with
+    no resample, forced re-election after a resample invalidates the held
+    object, and clearing on reversion to Phase 1."""
+
+    def _converged_population_distinct_weights(self, seed=0):
+        rng = np.random.default_rng(seed)
+        weights = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.65])
+        particles = []
+        for w in weights:
+            jitter = rng.normal(scale=1e-6, size=N_PARAMS)
+            particles.append(_particle(BASE_MU + jitter, sigma_scale=1e-6, weight=w))
+        return RBParticleFilter(particles=particles)
+
+    def _controller(self):
+        return PhaseSwitchController(
+            threshold_low=-2.0, threshold_high=1.0, mass_fraction_required=0.9
+        )
+
+    def test_champion_none_in_phase_1(self):
+        controller = self._controller()
+        # Disagreeing particles -- stays in Phase 1 (same construction as
+        # test_stays_in_phase_1_if_red_line_fails above).
+        rng = np.random.default_rng(1)
+        particles = [
+            _particle(BASE_MU + rng.normal(scale=2.0, size=N_PARAMS), 1e-6, weight=1.0)
+            for _ in range(8)
+        ]
+        pf = RBParticleFilter(particles=particles)
+        controller.step(pf)
+        assert controller.phase is Phase.PHASE_1_RAW_SIGNAL
+        assert controller.champion is None
+
+    def test_elects_highest_weight_particle_on_transition(self):
+        controller = self._controller()
+        pf = self._converged_population_distinct_weights()
+        controller.step(pf)
+        assert controller.phase is Phase.PHASE_2_FEATURE_BASED
+        expected = max(pf.particles, key=lambda p: p.weight)
+        assert controller.champion is expected
+
+    def test_champion_stable_across_steps_without_resample(self):
+        controller = self._controller()
+        pf = self._converged_population_distinct_weights()
+        controller.step(pf)
+        champion_first = controller.champion
+        controller.step(pf)  # same pf object, nothing resampled between calls
+        assert controller.champion is champion_first
+
+    def test_champion_reelected_after_resample(self):
+        controller = self._controller()
+        pf = self._converged_population_distinct_weights()
+        controller.step(pf)
+        champion_first = controller.champion
+
+        rng = np.random.default_rng(2)
+        pf.resample(rng, mu_jitter_scale=1e-10)
+        # resample() replaces pf.particles wholesale -- the old champion
+        # object is guaranteed dead, per particle_filter.py's resample().
+        assert not any(champion_first is p for p in pf.particles)
+
+        controller.step(pf)
+        assert controller.phase is Phase.PHASE_2_FEATURE_BASED  # tiny jitter, stays converged
+        assert controller.champion is not champion_first
+        assert any(controller.champion is p for p in pf.particles)
+
+    def test_champion_cleared_on_reversion(self):
+        controller = self._controller()
+        pf = self._converged_population_distinct_weights()
+        controller.step(pf)
+        assert controller.champion is not None
+
+        rng = np.random.default_rng(3)
+        regressed = RBParticleFilter(particles=[
+            _particle(BASE_MU + rng.normal(scale=1e-6, size=N_PARAMS), 50.0, weight=1.0)
+            for _ in range(8)
+        ])
+        controller.step(regressed)
+        assert controller.phase is Phase.PHASE_1_RAW_SIGNAL
+        assert controller.champion is None
